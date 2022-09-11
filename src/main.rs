@@ -1,11 +1,3 @@
-#![allow(dead_code)]
-#![allow(mutable_transmutes)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-#![allow(non_upper_case_globals)]
-#![allow(unused_assignments)]
-#![allow(unused_mut)]
-
 use api::api_load_libs;
 use lua_sys::*;
 use renderer::ren_init;
@@ -29,20 +21,20 @@ unsafe extern "C" fn get_scale() -> libc::c_double {
     return 1.0f64;
 }
 
-unsafe extern "C" fn get_exe_filename(mut buf: *mut libc::c_char, mut sz: libc::c_int) {
+unsafe extern "C" fn get_exe_filename(buf: *mut libc::c_char, sz: libc::c_int) {
     let mut path: [libc::c_char; 512] = [0; 512];
     libc::sprintf(
         path.as_mut_ptr(),
         b"/proc/%d/exe\0" as *const u8 as *const libc::c_char,
         libc::getpid(),
     );
-    let mut len: libc::c_int =
+    let len: libc::c_int =
         libc::readlink(path.as_mut_ptr(), buf, sz as usize - 1) as libc::c_int;
     *buf.offset(len as isize) = '\0' as i32 as libc::c_char;
 }
 
 unsafe extern "C" fn init_window_icon() {
-    static mut icon_rgba: [libc::c_uchar; 16384] = [
+    static mut ICON_RGBA: [libc::c_uchar; 16384] = [
         0x2e as libc::c_int as libc::c_uchar,
         0x2e as libc::c_int as libc::c_uchar,
         0x32 as libc::c_int as libc::c_uchar,
@@ -16428,9 +16420,8 @@ unsafe extern "C" fn init_window_icon() {
         0x32 as libc::c_int as libc::c_uchar,
         0x6e as libc::c_int as libc::c_uchar,
     ];
-    static mut icon_rgba_len: libc::c_uint = 16384 as libc::c_int as libc::c_uint;
-    let mut surf: *mut SDL_Surface = SDL_CreateRGBSurfaceFrom(
-        icon_rgba.as_mut_ptr() as *mut libc::c_void,
+    let surf: *mut SDL_Surface = SDL_CreateRGBSurfaceFrom(
+        ICON_RGBA.as_mut_ptr() as *mut libc::c_void,
         64 as libc::c_int,
         64 as libc::c_int,
         32 as libc::c_int,
@@ -16444,7 +16435,7 @@ unsafe extern "C" fn init_window_icon() {
     SDL_FreeSurface(surf);
 }
 
-unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> libc::c_int {
+unsafe fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
     SDL_Init(0x20 as libc::c_uint | 0x4000 as libc::c_uint);
     SDL_EnableScreenSaver();
     SDL_EventState(
@@ -16480,44 +16471,44 @@ unsafe fn main_0(mut argc: libc::c_int, mut argv: *mut *mut libc::c_char) -> lib
     );
     init_window_icon();
     ren_init(window);
-    let mut L: *mut lua_State = luaL_newstate();
-    luaL_openlibs(L);
-    api_load_libs(L);
-    lua_createtable(L, 0 as libc::c_int, 0 as libc::c_int);
+    let state: *mut lua_State = luaL_newstate();
+    luaL_openlibs(state);
+    api_load_libs(state);
+    lua_createtable(state, 0 as libc::c_int, 0 as libc::c_int);
     let mut i: libc::c_int = 0 as libc::c_int;
     while i < argc {
-        lua_pushstring(L, *argv.offset(i as isize));
-        lua_rawseti(L, -(2 as libc::c_int), i as libc::c_long + 1);
+        lua_pushstring(state, *argv.offset(i as isize));
+        lua_rawseti(state, -(2 as libc::c_int), i as libc::c_long + 1);
         i += 1;
     }
-    lua_setglobal(L, b"ARGS\0" as *const u8 as *const libc::c_char);
-    lua_pushstring(L, b"1.11\0" as *const u8 as *const libc::c_char);
-    lua_setglobal(L, b"VERSION\0" as *const u8 as *const libc::c_char);
-    lua_pushstring(L, SDL_GetPlatform() as *const libc::c_char);
-    lua_setglobal(L, b"PLATFORM\0" as *const u8 as *const libc::c_char);
-    lua_pushnumber(L, get_scale());
-    lua_setglobal(L, b"SCALE\0" as *const u8 as *const libc::c_char);
+    lua_setglobal(state, b"ARGS\0" as *const u8 as *const libc::c_char);
+    lua_pushstring(state, b"1.11\0" as *const u8 as *const libc::c_char);
+    lua_setglobal(state, b"VERSION\0" as *const u8 as *const libc::c_char);
+    lua_pushstring(state, SDL_GetPlatform() as *const libc::c_char);
+    lua_setglobal(state, b"PLATFORM\0" as *const u8 as *const libc::c_char);
+    lua_pushnumber(state, get_scale());
+    lua_setglobal(state, b"SCALE\0" as *const u8 as *const libc::c_char);
     let mut exename: [libc::c_char; 2048] = [0; 2048];
     get_exe_filename(
         exename.as_mut_ptr(),
         ::std::mem::size_of::<[libc::c_char; 2048]>() as libc::c_ulong as libc::c_int,
     );
-    lua_pushstring(L, exename.as_mut_ptr());
-    lua_setglobal(L, b"EXEFILE\0" as *const u8 as *const libc::c_char);
+    lua_pushstring(state, exename.as_mut_ptr());
+    lua_setglobal(state, b"EXEFILE\0" as *const u8 as *const libc::c_char);
     (luaL_loadstring(
-        L,
+        state,
         b"local core\nxpcall(function()\n  SCALE = tonumber(os.getenv(\"LITE_SCALE\")) or SCALE\n  PATHSEP = package.config:sub(1, 1)\n  EXEDIR = EXEFILE:match(\"^(.+)[/\\\\].*$\")\n  package.path = EXEDIR .. '/data/?.lua;' .. package.path\n  package.path = EXEDIR .. '/data/?/init.lua;' .. package.path\n  core = require('core')\n  core.init()\n  core.run()\nend, function(err)\n  print('Error: ' .. tostring(err))\n  print(debug.traceback(nil, 2))\n  if core and core.on_error then\n    pcall(core.on_error, err)\n  end\n  os.exit(1)\nend)\0"
             as *const u8 as *const libc::c_char,
     ) != 0
         || lua_pcallk(
-            L,
+            state,
             0 as libc::c_int,
             -(1 as libc::c_int),
             0 as libc::c_int,
             0,
             Option::None,
         ) != 0) as libc::c_int;
-    lua_close(L);
+    lua_close(state);
     SDL_DestroyWindow(window);
     return 0 as libc::c_int;
 }
