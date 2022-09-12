@@ -1,7 +1,10 @@
 use crate::{rencache::rencache_invalidate, window};
 use lua_sys::*;
 use sdl2_sys::*;
-use std::ptr;
+use std::{
+    mem::{self, MaybeUninit},
+    ptr,
+};
 
 pub const WIN_FULLSCREEN: libc::c_uint = 2;
 
@@ -11,24 +14,21 @@ pub const WIN_NORMAL: libc::c_uint = 0;
 
 unsafe extern "C" fn button_name(button: libc::c_int) -> *const libc::c_char {
     match button {
-        1 => return b"left\0" as *const u8 as *const libc::c_char,
-        2 => return b"middle\0" as *const u8 as *const libc::c_char,
-        3 => return b"right\0" as *const u8 as *const libc::c_char,
-        _ => return b"?\0" as *const u8 as *const libc::c_char,
-    };
+        1 => b"left\0" as *const u8 as *const libc::c_char,
+        2 => b"middle\0" as *const u8 as *const libc::c_char,
+        3 => b"right\0" as *const u8 as *const libc::c_char,
+        _ => b"?\0" as *const u8 as *const libc::c_char,
+    }
 }
 
-unsafe extern "C" fn key_name(
-    dst: *mut libc::c_char,
-    sym: libc::c_int,
-) -> *mut libc::c_char {
+unsafe extern "C" fn key_name(dst: *mut libc::c_char, sym: libc::c_int) -> *mut libc::c_char {
     libc::strcpy(dst, SDL_GetKeyName(sym));
     let mut p: *mut libc::c_char = dst;
     while *p != 0 {
         *p = libc::tolower(*p as libc::c_int) as libc::c_char;
         p = p.offset(1);
     }
-    return dst;
+    dst
 }
 
 unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> libc::c_int {
@@ -55,14 +55,12 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> libc::c_int {
                     lua_pushnumber(state, e.window.data1 as lua_Number);
                     lua_pushnumber(state, e.window.data2 as lua_Number);
                     return 3 as libc::c_int;
-                } else {
-                    if e.window.event as libc::c_int
-                        == SDL_WindowEventID::SDL_WINDOWEVENT_EXPOSED as libc::c_int
-                    {
-                        rencache_invalidate();
-                        lua_pushstring(state, b"exposed\0" as *const u8 as *const libc::c_char);
-                        return 1 as libc::c_int;
-                    }
+                } else if e.window.event as libc::c_int
+                    == SDL_WindowEventID::SDL_WINDOWEVENT_EXPOSED as libc::c_int
+                {
+                    rencache_invalidate();
+                    lua_pushstring(state, b"exposed\0" as *const u8 as *const libc::c_char);
+                    return 1 as libc::c_int;
                 }
                 if e.window.event as libc::c_int
                     == SDL_WindowEventID::SDL_WINDOWEVENT_FOCUS_GAINED as libc::c_int
@@ -110,7 +108,10 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> libc::c_int {
                 if e.button.button as libc::c_int == 1 as libc::c_int {
                     SDL_CaptureMouse(SDL_bool::SDL_FALSE);
                 }
-                lua_pushstring(state, b"mousereleased\0" as *const u8 as *const libc::c_char);
+                lua_pushstring(
+                    state,
+                    b"mousereleased\0" as *const u8 as *const libc::c_char,
+                );
                 lua_pushstring(state, button_name(e.button.button as libc::c_int));
                 lua_pushnumber(state, e.button.x as lua_Number);
                 lua_pushnumber(state, e.button.y as lua_Number);
@@ -139,11 +140,11 @@ unsafe extern "C" fn f_wait_event(state: *mut lua_State) -> libc::c_int {
     lua_pushboolean(
         state,
         SDL_WaitEventTimeout(
-            0 as *mut SDL_Event,
+            ptr::null_mut(),
             (n * 1000 as libc::c_int as libc::c_double) as libc::c_int,
         ),
     );
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 static mut CURSOR_CACHE: [*mut SDL_Cursor; 12] = [0 as *const SDL_Cursor as *mut SDL_Cursor; 12];
@@ -175,17 +176,17 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> libc::c_int {
     let n = CURSOR_ENUMS[opt as usize];
     let mut cursor: *mut SDL_Cursor = CURSOR_CACHE[n as usize];
     if cursor.is_null() {
-        cursor = SDL_CreateSystemCursor(std::mem::transmute(n));
+        cursor = SDL_CreateSystemCursor(n);
         CURSOR_CACHE[n as usize] = cursor;
     }
     SDL_SetCursor(cursor);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> libc::c_int {
     let title: *const libc::c_char = luaL_checklstring(state, 1 as libc::c_int, ptr::null_mut());
     SDL_SetWindowTitle(window, title);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 static mut WINDOW_OPTS: [*const libc::c_char; 4] = [
@@ -216,7 +217,7 @@ unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> libc::c_int {
     if n == WIN_MAXIMIZED as libc::c_int {
         SDL_MaximizeWindow(window);
     }
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> libc::c_int {
@@ -226,7 +227,7 @@ unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> libc::c_int {
         (flags & SDL_WindowFlags::SDL_WINDOW_INPUT_FOCUS as libc::c_int as libc::c_uint)
             as libc::c_int,
     );
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> libc::c_int {
@@ -234,49 +235,49 @@ unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> libc::c_int
     let msg: *const libc::c_char = luaL_checklstring(state, 2 as libc::c_int, ptr::null_mut());
     let mut buttons: [SDL_MessageBoxButtonData; 2] = [
         {
-            let init = SDL_MessageBoxButtonData {
+            SDL_MessageBoxButtonData {
                 flags: SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT
                     as libc::c_int as Uint32,
                 buttonid: 1 as libc::c_int,
                 text: b"Yes\0" as *const u8 as *const libc::c_char,
-            };
-            init
+            }
         },
         {
-            let init = SDL_MessageBoxButtonData {
+            SDL_MessageBoxButtonData {
                 flags: SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT
                     as libc::c_int as Uint32,
                 buttonid: 0 as libc::c_int,
                 text: b"No\0" as *const u8 as *const libc::c_char,
-            };
-            init
+            }
         },
     ];
-    let mut data: SDL_MessageBoxData = {
-        let init = SDL_MessageBoxData {
+    let data: SDL_MessageBoxData = {
+        SDL_MessageBoxData {
             flags: 0,
-            window: 0 as *mut SDL_Window,
-            title: title,
+            window: ptr::null_mut(),
+            title,
             message: msg,
             numbuttons: 2 as libc::c_int,
             buttons: buttons.as_mut_ptr(),
-            colorScheme: 0 as *const SDL_MessageBoxColorScheme,
-        };
-        init
+            colorScheme: ptr::null(),
+        }
     };
     let mut buttonid: libc::c_int = 0;
-    SDL_ShowMessageBox(&mut data, &mut buttonid);
+    SDL_ShowMessageBox(&data, &mut buttonid);
     lua_pushboolean(state, (buttonid == 1 as libc::c_int) as libc::c_int);
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 unsafe extern "C" fn f_chdir(state: *mut lua_State) -> libc::c_int {
     let path: *const libc::c_char = luaL_checklstring(state, 1 as libc::c_int, ptr::null_mut());
     let err: libc::c_int = libc::chdir(path);
     if err != 0 {
-        luaL_error(state, b"chdir() failed\0" as *const u8 as *const libc::c_char);
+        luaL_error(
+            state,
+            b"chdir() failed\0" as *const u8 as *const libc::c_char,
+        );
     }
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_list_dir(state: *mut lua_State) -> libc::c_int {
@@ -313,23 +314,23 @@ unsafe extern "C" fn f_list_dir(state: *mut lua_State) -> libc::c_int {
         i += 1;
     }
     libc::closedir(dir);
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 unsafe extern "C" fn f_absolute_path(state: *mut lua_State) -> libc::c_int {
     let path: *const libc::c_char = luaL_checklstring(state, 1 as libc::c_int, ptr::null_mut());
-    let res: *mut libc::c_char = realpath(path, 0 as *mut libc::c_char);
+    let res: *mut libc::c_char = realpath(path, ptr::null_mut());
     if res.is_null() {
         return 0 as libc::c_int;
     }
     lua_pushstring(state, res);
     free(res as *mut libc::c_void);
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 unsafe extern "C" fn f_get_file_info(state: *mut lua_State) -> libc::c_int {
     let path: *const libc::c_char = luaL_checklstring(state, 1 as libc::c_int, ptr::null_mut());
-    let mut s = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let mut s = MaybeUninit::<libc::stat>::uninit();
     let err: libc::c_int = libc::stat(path, s.as_mut_ptr());
     if err < 0 as libc::c_int {
         lua_pushnil(state);
@@ -366,7 +367,7 @@ unsafe extern "C" fn f_get_file_info(state: *mut lua_State) -> libc::c_int {
         -(2 as libc::c_int),
         b"type\0" as *const u8 as *const libc::c_char,
     );
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 unsafe extern "C" fn f_get_clipboard(state: *mut lua_State) -> libc::c_int {
@@ -376,33 +377,32 @@ unsafe extern "C" fn f_get_clipboard(state: *mut lua_State) -> libc::c_int {
     }
     lua_pushstring(state, text);
     SDL_free(text as *mut libc::c_void);
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 unsafe extern "C" fn f_set_clipboard(state: *mut lua_State) -> libc::c_int {
     let text: *const libc::c_char = luaL_checklstring(state, 1 as libc::c_int, ptr::null_mut());
     SDL_SetClipboardText(text);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_get_time(state: *mut lua_State) -> libc::c_int {
     let n: libc::c_double = SDL_GetPerformanceCounter() as libc::c_double
         / SDL_GetPerformanceFrequency() as libc::c_double;
     lua_pushnumber(state, n);
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 unsafe extern "C" fn f_sleep(state: *mut lua_State) -> libc::c_int {
     let n: libc::c_double = luaL_checknumber(state, 1 as libc::c_int);
     SDL_Delay((n * 1000 as libc::c_int as libc::c_double) as Uint32);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_exec(state: *mut lua_State) -> libc::c_int {
     let mut len = 0;
     let cmd: *const libc::c_char = luaL_checklstring(state, 1 as libc::c_int, &mut len);
-    let buf: *mut libc::c_char =
-        malloc(len.wrapping_add(32) as libc::c_ulong) as *mut libc::c_char;
+    let buf: *mut libc::c_char = malloc(len.wrapping_add(32) as libc::c_ulong) as *mut libc::c_char;
     if buf.is_null() {
         luaL_error(
             state,
@@ -412,7 +412,7 @@ unsafe extern "C" fn f_exec(state: *mut lua_State) -> libc::c_int {
     libc::sprintf(buf, b"%s &\0" as *const u8 as *const libc::c_char, cmd);
     let _: libc::c_int = system(buf);
     free(buf as *mut libc::c_void);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_fuzzy_match(state: *mut lua_State) -> libc::c_int {
@@ -441,138 +441,85 @@ unsafe extern "C" fn f_fuzzy_match(state: *mut lua_State) -> libc::c_int {
     if *ptn != 0 {
         return 0 as libc::c_int;
     }
-    lua_pushnumber(state, (score - libc::strlen(str) as libc::c_int) as lua_Number);
-    return 1 as libc::c_int;
+    lua_pushnumber(
+        state,
+        (score - libc::strlen(str) as libc::c_int) as lua_Number,
+    );
+    1 as libc::c_int
 }
 
 static mut LIB: [luaL_Reg; 18] = [
-    {
-        let init = luaL_Reg {
-            name: b"poll_event\0" as *const u8 as *const libc::c_char,
-            func: Some(f_poll_event as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"poll_event\0" as *const u8 as *const libc::c_char,
+        func: Some(f_poll_event as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"wait_event\0" as *const u8 as *const libc::c_char,
-            func: Some(f_wait_event as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"wait_event\0" as *const u8 as *const libc::c_char,
+        func: Some(f_wait_event as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"set_cursor\0" as *const u8 as *const libc::c_char,
-            func: Some(f_set_cursor as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"set_cursor\0" as *const u8 as *const libc::c_char,
+        func: Some(f_set_cursor as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"set_window_title\0" as *const u8 as *const libc::c_char,
-            func: Some(f_set_window_title as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"set_window_title\0" as *const u8 as *const libc::c_char,
+        func: Some(f_set_window_title as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"set_window_mode\0" as *const u8 as *const libc::c_char,
-            func: Some(f_set_window_mode as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"set_window_mode\0" as *const u8 as *const libc::c_char,
+        func: Some(f_set_window_mode as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"window_has_focus\0" as *const u8 as *const libc::c_char,
-            func: Some(f_window_has_focus as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"window_has_focus\0" as *const u8 as *const libc::c_char,
+        func: Some(f_window_has_focus as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"show_confirm_dialog\0" as *const u8 as *const libc::c_char,
-            func: Some(
-                f_show_confirm_dialog as unsafe extern "C" fn(*mut lua_State) -> libc::c_int,
-            ),
-        };
-        init
+    luaL_Reg {
+        name: b"show_confirm_dialog\0" as *const u8 as *const libc::c_char,
+        func: Some(f_show_confirm_dialog as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"chdir\0" as *const u8 as *const libc::c_char,
-            func: Some(f_chdir as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"chdir\0" as *const u8 as *const libc::c_char,
+        func: Some(f_chdir as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"list_dir\0" as *const u8 as *const libc::c_char,
-            func: Some(f_list_dir as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"list_dir\0" as *const u8 as *const libc::c_char,
+        func: Some(f_list_dir as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"absolute_path\0" as *const u8 as *const libc::c_char,
-            func: Some(f_absolute_path as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"absolute_path\0" as *const u8 as *const libc::c_char,
+        func: Some(f_absolute_path as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"get_file_info\0" as *const u8 as *const libc::c_char,
-            func: Some(f_get_file_info as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"get_file_info\0" as *const u8 as *const libc::c_char,
+        func: Some(f_get_file_info as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"get_clipboard\0" as *const u8 as *const libc::c_char,
-            func: Some(f_get_clipboard as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"get_clipboard\0" as *const u8 as *const libc::c_char,
+        func: Some(f_get_clipboard as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"set_clipboard\0" as *const u8 as *const libc::c_char,
-            func: Some(f_set_clipboard as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"set_clipboard\0" as *const u8 as *const libc::c_char,
+        func: Some(f_set_clipboard as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"get_time\0" as *const u8 as *const libc::c_char,
-            func: Some(f_get_time as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"get_time\0" as *const u8 as *const libc::c_char,
+        func: Some(f_get_time as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"sleep\0" as *const u8 as *const libc::c_char,
-            func: Some(f_sleep as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"sleep\0" as *const u8 as *const libc::c_char,
+        func: Some(f_sleep as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"exec\0" as *const u8 as *const libc::c_char,
-            func: Some(f_exec as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"exec\0" as *const u8 as *const libc::c_char,
+        func: Some(f_exec as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"fuzzy_match\0" as *const u8 as *const libc::c_char,
-            func: Some(f_fuzzy_match as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"fuzzy_match\0" as *const u8 as *const libc::c_char,
+        func: Some(f_fuzzy_match as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: 0 as *const libc::c_char,
-            func: Option::None,
-        };
-        init
+    luaL_Reg {
+        name: 0 as *const libc::c_char,
+        func: Option::None,
     },
 ];
 
@@ -581,10 +528,10 @@ pub unsafe extern "C" fn luaopen_system(state: *mut lua_State) -> libc::c_int {
     lua_createtable(
         state,
         0 as libc::c_int,
-        (::std::mem::size_of::<[luaL_Reg; 18]>() as libc::c_ulong)
-            .wrapping_div(::std::mem::size_of::<luaL_Reg>() as libc::c_ulong)
+        (mem::size_of::<[luaL_Reg; 18]>() as libc::c_ulong)
+            .wrapping_div(mem::size_of::<luaL_Reg>() as libc::c_ulong)
             .wrapping_sub(1 as libc::c_int as libc::c_ulong) as libc::c_int,
     );
     luaL_setfuncs(state, LIB.as_ptr(), 0 as libc::c_int);
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }

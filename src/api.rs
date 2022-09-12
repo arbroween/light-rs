@@ -7,26 +7,17 @@ mod renderer_font;
 mod system;
 
 static mut LIBS: [luaL_Reg; 3] = [
-    {
-        let init = luaL_Reg {
-            name: b"system\0" as *const u8 as *const libc::c_char,
-            func: Some(luaopen_system as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"system\0" as *const u8 as *const libc::c_char,
+        func: Some(luaopen_system as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"renderer\0" as *const u8 as *const libc::c_char,
-            func: Some(luaopen_renderer as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"renderer\0" as *const u8 as *const libc::c_char,
+        func: Some(luaopen_renderer as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: 0 as *const libc::c_char,
-            func: None,
-        };
-        init
+    luaL_Reg {
+        name: 0 as *const libc::c_char,
+        func: None,
     },
 ];
 

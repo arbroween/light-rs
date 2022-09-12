@@ -1,7 +1,10 @@
+#![warn(clippy::all)]
+
 use api::api_load_libs;
 use lua_sys::*;
 use renderer::ren_init;
 use sdl2_sys::*;
+use std::{ffi::CString, mem, ptr};
 
 pub mod api;
 pub mod rencache;
@@ -12,13 +15,8 @@ pub static mut window: *mut SDL_Window = 0 as *const SDL_Window as *mut SDL_Wind
 
 unsafe extern "C" fn get_scale() -> libc::c_double {
     let mut dpi: libc::c_float = 0.;
-    SDL_GetDisplayDPI(
-        0 as libc::c_int,
-        0 as *mut libc::c_float,
-        &mut dpi,
-        0 as *mut libc::c_float,
-    );
-    return 1.0f64;
+    SDL_GetDisplayDPI(0 as libc::c_int, ptr::null_mut(), &mut dpi, ptr::null_mut());
+    1.0f64
 }
 
 unsafe extern "C" fn get_exe_filename(buf: *mut libc::c_char, sz: libc::c_int) {
@@ -28,8 +26,7 @@ unsafe extern "C" fn get_exe_filename(buf: *mut libc::c_char, sz: libc::c_int) {
         b"/proc/%d/exe\0" as *const u8 as *const libc::c_char,
         libc::getpid(),
     );
-    let len: libc::c_int =
-        libc::readlink(path.as_mut_ptr(), buf, sz as usize - 1) as libc::c_int;
+    let len: libc::c_int = libc::readlink(path.as_mut_ptr(), buf, sz as usize - 1) as libc::c_int;
     *buf.offset(len as isize) = '\0' as i32 as libc::c_char;
 }
 
@@ -16456,7 +16453,7 @@ unsafe fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int
         w: 0,
         h: 0,
         refresh_rate: 0,
-        driverdata: 0 as *mut libc::c_void,
+        driverdata: ptr::null_mut(),
     };
     SDL_GetCurrentDisplayMode(0 as libc::c_int, &mut dm);
     window = SDL_CreateWindow(
@@ -16491,11 +16488,11 @@ unsafe fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int
     let mut exename: [libc::c_char; 2048] = [0; 2048];
     get_exe_filename(
         exename.as_mut_ptr(),
-        ::std::mem::size_of::<[libc::c_char; 2048]>() as libc::c_ulong as libc::c_int,
+        mem::size_of::<[libc::c_char; 2048]>() as libc::c_ulong as libc::c_int,
     );
     lua_pushstring(state, exename.as_mut_ptr());
     lua_setglobal(state, b"EXEFILE\0" as *const u8 as *const libc::c_char);
-    (luaL_loadstring(
+    let _ = luaL_loadstring(
         state,
         b"local core\nxpcall(function()\n  SCALE = tonumber(os.getenv(\"LITE_SCALE\")) or SCALE\n  PATHSEP = package.config:sub(1, 1)\n  EXEDIR = EXEFILE:match(\"^(.+)[/\\\\].*$\")\n  package.path = EXEDIR .. '/data/?.lua;' .. package.path\n  package.path = EXEDIR .. '/data/?/init.lua;' .. package.path\n  core = require('core')\n  core.init()\n  core.run()\nend, function(err)\n  print('Error: ' .. tostring(err))\n  print(debug.traceback(nil, 2))\n  if core and core.on_error then\n    pcall(core.on_error, err)\n  end\n  os.exit(1)\nend)\0"
             as *const u8 as *const libc::c_char,
@@ -16507,24 +16504,24 @@ unsafe fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int
             0 as libc::c_int,
             0,
             Option::None,
-        ) != 0) as libc::c_int;
+        ) != 0;
     lua_close(state);
     SDL_DestroyWindow(window);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 fn main() {
     let mut args: Vec<*mut libc::c_char> = Vec::new();
-    for arg in ::std::env::args() {
+    for arg in std::env::args() {
         args.push(
-            (::std::ffi::CString::new(arg))
+            (CString::new(arg))
                 .expect("Failed to convert argument into CString.")
                 .into_raw(),
         );
     }
-    args.push(::std::ptr::null_mut());
+    args.push(ptr::null_mut());
     unsafe {
-        ::std::process::exit(main_0(
+        std::process::exit(main_0(
             (args.len() - 1) as libc::c_int,
             args.as_mut_ptr() as *mut *mut libc::c_char,
         ) as i32)

@@ -1,5 +1,6 @@
 use sdl2_sys::*;
 use stb_truetype_rust::*;
+use std::{mem, ptr};
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -67,7 +68,7 @@ unsafe extern "C" fn check_alloc(ptr: *mut libc::c_void) -> *mut libc::c_void {
         eprintln!("Fatal error: memory allocation failed");
         exit(1 as libc::c_int);
     }
-    return ptr;
+    ptr
 }
 
 unsafe extern "C" fn utf8_to_codepoint(
@@ -97,14 +98,14 @@ unsafe extern "C" fn utf8_to_codepoint(
     loop {
         let fresh0 = n;
         n = n.wrapping_sub(1);
-        if !(fresh0 != 0) {
+        if fresh0 == 0 {
             break;
         }
         p = p.offset(1);
         res = res << 6 as libc::c_int | (*p as libc::c_int & 0x3f as libc::c_int) as libc::c_uint;
     }
     *dst = res;
-    return p.offset(1 as libc::c_int as isize);
+    p.offset(1 as libc::c_int as isize)
 }
 
 #[no_mangle]
@@ -113,13 +114,12 @@ pub unsafe extern "C" fn ren_init(win: *mut SDL_Window) {
     WINDOW = win;
     let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
     ren_set_clip_rect({
-        let init = RenRect {
+        RenRect {
             x: 0 as libc::c_int,
             y: 0 as libc::c_int,
             width: (*surf).w,
             height: (*surf).h,
-        };
-        init
+        }
     });
 }
 
@@ -149,23 +149,20 @@ pub unsafe extern "C" fn ren_get_size(x: *mut libc::c_int, y: *mut libc::c_int) 
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_new_image(
-    width: libc::c_int,
-    height: libc::c_int,
-) -> *mut RenImage {
+pub unsafe extern "C" fn ren_new_image(width: libc::c_int, height: libc::c_int) -> *mut RenImage {
     assert!(width > 0 && height > 0);
     let mut image: *mut RenImage = malloc(
-        (::std::mem::size_of::<RenImage>() as libc::c_ulong).wrapping_add(
+        (mem::size_of::<RenImage>() as libc::c_ulong).wrapping_add(
             ((width * height) as libc::c_ulong)
-                .wrapping_mul(::std::mem::size_of::<RenColor>() as libc::c_ulong),
+                .wrapping_mul(mem::size_of::<RenColor>() as libc::c_ulong),
         ),
     ) as *mut RenImage;
     check_alloc(image as *mut libc::c_void);
-    let ref mut fresh1 = (*image).pixels;
+    let fresh1 = &mut (*image).pixels;
     *fresh1 = image.offset(1 as libc::c_int as isize) as *mut libc::c_void as *mut RenColor;
     (*image).width = width;
     (*image).height = height;
-    return image;
+    image
 }
 
 #[no_mangle]
@@ -176,17 +173,18 @@ pub unsafe extern "C" fn ren_free_image(image: *mut RenImage) {
 unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: libc::c_int) -> *mut GlyphSet {
     let mut set: *mut GlyphSet = check_alloc(calloc(
         1 as libc::c_int as libc::c_ulong,
-        ::std::mem::size_of::<GlyphSet>() as libc::c_ulong,
+        mem::size_of::<GlyphSet>() as libc::c_ulong,
     )) as *mut GlyphSet;
     let mut width: libc::c_int = 128 as libc::c_int;
     let mut height: libc::c_int = 128 as libc::c_int;
     loop {
-        let ref mut fresh2 = (*set).image;
+        let fresh2 = &mut (*set).image;
         *fresh2 = ren_new_image(width, height);
-        let s: libc::c_float = stbtt_ScaleForMappingEmToPixels(
-            &mut (*font).stbfont,
-            1 as libc::c_int as libc::c_float,
-        ) / stbtt_ScaleForPixelHeight(&mut (*font).stbfont, 1 as libc::c_int as libc::c_float);
+        let s: libc::c_float =
+            stbtt_ScaleForMappingEmToPixels(
+                &mut (*font).stbfont,
+                1 as libc::c_int as libc::c_float,
+            ) / stbtt_ScaleForPixelHeight(&mut (*font).stbfont, 1 as libc::c_int as libc::c_float);
         let res: libc::c_int = stbtt_BakeFontBitmap(
             (*font).data as *const libc::c_uchar,
             0 as libc::c_int,
@@ -198,7 +196,7 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: libc::c_int) -> *mut
             256 as libc::c_int,
             ((*set).glyphs).as_mut_ptr(),
         );
-        if !(res < 0 as libc::c_int) {
+        if res >= 0 as libc::c_int {
             break;
         }
         width *= 2 as libc::c_int;
@@ -214,8 +212,7 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: libc::c_int) -> *mut
         &mut descent,
         &mut linegap,
     );
-    let scale: libc::c_float =
-        stbtt_ScaleForMappingEmToPixels(&mut (*font).stbfont, (*font).size);
+    let scale: libc::c_float = stbtt_ScaleForMappingEmToPixels(&mut (*font).stbfont, (*font).size);
     let scaled_ascent: libc::c_int =
         ((ascent as libc::c_float * scale) as libc::c_double + 0.5f64) as libc::c_int;
     let mut i: libc::c_int = 0 as libc::c_int;
@@ -229,29 +226,25 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: libc::c_int) -> *mut
     while i_0 >= 0 as libc::c_int {
         let n: u8 = *((*(*set).image).pixels as *mut u8).offset(i_0 as isize);
         *((*(*set).image).pixels).offset(i_0 as isize) = {
-            let init = RenColor {
+            RenColor {
                 b: 255,
                 g: 255,
                 r: 255,
                 a: n,
-            };
-            init
+            }
         };
         i_0 -= 1;
     }
-    return set;
+    set
 }
 
-unsafe extern "C" fn get_glyphset(
-    font: *mut RenFont,
-    codepoint: libc::c_int,
-) -> *mut GlyphSet {
+unsafe extern "C" fn get_glyphset(font: *mut RenFont, codepoint: libc::c_int) -> *mut GlyphSet {
     let idx: libc::c_int = (codepoint >> 8 as libc::c_int) % 256 as libc::c_int;
     if ((*font).sets[idx as usize]).is_null() {
-        let ref mut fresh3 = (*font).sets[idx as usize];
+        let fresh3 = &mut (*font).sets[idx as usize];
         *fresh3 = load_glyphset(font, idx);
     }
-    return (*font).sets[idx as usize];
+    (*font).sets[idx as usize]
 }
 
 #[no_mangle]
@@ -261,22 +254,23 @@ pub unsafe extern "C" fn ren_load_font(
 ) -> *mut RenFont {
     let mut font: *mut RenFont = check_alloc(calloc(
         1 as libc::c_int as libc::c_ulong,
-        ::std::mem::size_of::<RenFont>() as libc::c_ulong,
+        mem::size_of::<RenFont>() as libc::c_ulong,
     )) as *mut RenFont;
     (*font).size = size;
-    let mut fp: *mut libc::FILE = libc::fopen(filename, b"rb\0" as *const u8 as *const libc::c_char);
+    let mut fp: *mut libc::FILE =
+        libc::fopen(filename, b"rb\0" as *const u8 as *const libc::c_char);
     if fp.is_null() {
-        return 0 as *mut RenFont;
+        return ptr::null_mut();
     }
     libc::fseek(fp, 0 as libc::c_int as libc::c_long, 2 as libc::c_int);
     let buf_size: libc::c_int = libc::ftell(fp) as libc::c_int;
     libc::fseek(fp, 0 as libc::c_int as libc::c_long, 0 as libc::c_int);
-    let ref mut fresh4 = (*font).data;
+    let fresh4 = &mut (*font).data;
     *fresh4 = check_alloc(malloc(buf_size as libc::c_ulong));
     let mut _unused: libc::c_int =
         libc::fread((*font).data, 1, buf_size as usize, fp) as libc::c_int;
     libc::fclose(fp);
-    fp = 0 as *mut libc::FILE;
+    fp = ptr::null_mut();
     let ok: libc::c_int = stbtt_InitFont(
         &mut (*font).stbfont,
         (*font).data as *const libc::c_uchar,
@@ -290,7 +284,7 @@ pub unsafe extern "C" fn ren_load_font(
             free((*font).data);
         }
         free(font as *mut libc::c_void);
-        return 0 as *mut RenFont;
+        ptr::null_mut()
     } else {
         let mut ascent: libc::c_int = 0;
         let mut descent: libc::c_int = 0;
@@ -307,8 +301,8 @@ pub unsafe extern "C" fn ren_load_font(
         let g: *mut stbtt_bakedchar = ((*get_glyphset(font, '\n' as i32)).glyphs).as_mut_ptr();
         (*g.offset('\t' as i32 as isize)).x1 = (*g.offset('\t' as i32 as isize)).x0;
         (*g.offset('\n' as i32 as isize)).x1 = (*g.offset('\n' as i32 as isize)).x0;
-        return font;
-    };
+        font
+    }
 }
 
 #[no_mangle]
@@ -349,24 +343,24 @@ pub unsafe extern "C" fn ren_get_font_width(
             as *mut stbtt_bakedchar;
         x = (x as libc::c_float + (*g).xadvance) as libc::c_int;
     }
-    return x;
+    x
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn ren_get_font_height(font: *mut RenFont) -> libc::c_int {
-    return (*font).height;
+    (*font).height
 }
 
 #[inline]
 unsafe extern "C" fn blend_pixel(mut dst: RenColor, src: RenColor) -> RenColor {
     let ia: libc::c_int = 0xff as libc::c_int - src.a as libc::c_int;
-    dst.r = (src.r as libc::c_int * src.a as libc::c_int + dst.r as libc::c_int * ia
+    dst.r = ((src.r as libc::c_int * src.a as libc::c_int + dst.r as libc::c_int * ia)
         >> 8 as libc::c_int) as u8;
-    dst.g = (src.g as libc::c_int * src.a as libc::c_int + dst.g as libc::c_int * ia
+    dst.g = ((src.g as libc::c_int * src.a as libc::c_int + dst.g as libc::c_int * ia)
         >> 8 as libc::c_int) as u8;
-    dst.b = (src.b as libc::c_int * src.a as libc::c_int + dst.b as libc::c_int * ia
+    dst.b = ((src.b as libc::c_int * src.a as libc::c_int + dst.b as libc::c_int * ia)
         >> 8 as libc::c_int) as u8;
-    return dst;
+    dst
 }
 
 #[inline]
@@ -375,18 +369,18 @@ unsafe extern "C" fn blend_pixel2(
     mut src: RenColor,
     color: RenColor,
 ) -> RenColor {
-    src.a = (src.a as libc::c_int * color.a as libc::c_int >> 8 as libc::c_int) as u8;
+    src.a = ((src.a as libc::c_int * color.a as libc::c_int) >> 8 as libc::c_int) as u8;
     let ia: libc::c_int = 0xff as libc::c_int - src.a as libc::c_int;
-    dst.r = ((src.r as libc::c_int * color.r as libc::c_int * src.a as libc::c_int
+    dst.r = (((src.r as libc::c_int * color.r as libc::c_int * src.a as libc::c_int)
         >> 16 as libc::c_int)
-        + (dst.r as libc::c_int * ia >> 8 as libc::c_int)) as u8;
-    dst.g = ((src.g as libc::c_int * color.g as libc::c_int * src.a as libc::c_int
+        + ((dst.r as libc::c_int * ia) >> 8 as libc::c_int)) as u8;
+    dst.g = (((src.g as libc::c_int * color.g as libc::c_int * src.a as libc::c_int)
         >> 16 as libc::c_int)
-        + (dst.g as libc::c_int * ia >> 8 as libc::c_int)) as u8;
-    dst.b = ((src.b as libc::c_int * color.b as libc::c_int * src.a as libc::c_int
+        + ((dst.g as libc::c_int * ia) >> 8 as libc::c_int)) as u8;
+    dst.b = (((src.b as libc::c_int * color.b as libc::c_int * src.a as libc::c_int)
         >> 16 as libc::c_int)
-        + (dst.b as libc::c_int * ia >> 8 as libc::c_int)) as u8;
-    return dst;
+        + ((dst.b as libc::c_int * ia) >> 8 as libc::c_int)) as u8;
+    dst
 }
 
 #[no_mangle]
@@ -527,5 +521,5 @@ pub unsafe extern "C" fn ren_draw_text(
         );
         x = (x as libc::c_float + (*g).xadvance) as libc::c_int;
     }
-    return x;
+    x
 }

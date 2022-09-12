@@ -2,6 +2,7 @@ use crate::renderer::{
     ren_draw_rect, ren_draw_text, ren_free_font, ren_get_font_height, ren_get_font_width,
     ren_get_size, ren_set_clip_rect, ren_update_rects, RenColor, RenFont, RenRect,
 };
+use std::{mem, ptr};
 
 #[derive(Copy, Clone)]
 #[repr(C)]
@@ -54,24 +55,28 @@ static mut SHOW_DEBUG: bool = false;
 
 #[inline]
 unsafe extern "C" fn min(a: libc::c_int, b: libc::c_int) -> libc::c_int {
-    return if a < b { a } else { b };
+    if a < b {
+        a
+    } else {
+        b
+    }
 }
 
 #[inline]
 unsafe extern "C" fn max(a: libc::c_int, b: libc::c_int) -> libc::c_int {
-    return if a > b { a } else { b };
+    if a > b {
+        a
+    } else {
+        b
+    }
 }
 
-unsafe extern "C" fn hash(
-    h: *mut libc::c_uint,
-    data: *const libc::c_void,
-    mut size: libc::c_int,
-) {
+unsafe extern "C" fn hash(h: *mut libc::c_uint, data: *const libc::c_void, mut size: libc::c_int) {
     let mut p: *const libc::c_uchar = data as *const libc::c_uchar;
     loop {
         let fresh0 = size;
-        size = size - 1;
-        if !(fresh0 != 0) {
+        size -= 1;
+        if fresh0 == 0 {
             break;
         }
         let fresh1 = p;
@@ -82,15 +87,12 @@ unsafe extern "C" fn hash(
 
 #[inline]
 unsafe extern "C" fn cell_idx(x: libc::c_int, y: libc::c_int) -> libc::c_int {
-    return x + y * 80 as libc::c_int;
+    x + y * 80 as libc::c_int
 }
 
 #[inline]
 unsafe extern "C" fn rects_overlap(a: RenRect, b: RenRect) -> bool {
-    return b.x + b.width >= a.x
-        && b.x <= a.x + a.width
-        && b.y + b.height >= a.y
-        && b.y <= a.y + a.height;
+    b.x + b.width >= a.x && b.x <= a.x + a.width && b.y + b.height >= a.y && b.y <= a.y + a.height
 }
 
 unsafe extern "C" fn intersect_rects(a: RenRect, b: RenRect) -> RenRect {
@@ -98,15 +100,14 @@ unsafe extern "C" fn intersect_rects(a: RenRect, b: RenRect) -> RenRect {
     let y1: libc::c_int = max(a.y, b.y);
     let x2: libc::c_int = min(a.x + a.width, b.x + b.width);
     let y2: libc::c_int = min(a.y + a.height, b.y + b.height);
-    return {
-        let init = RenRect {
+    {
+        RenRect {
             x: x1,
             y: y1,
             width: max(0 as libc::c_int, x2 - x1),
             height: max(0 as libc::c_int, y2 - y1),
-        };
-        init
-    };
+        }
+    }
 }
 
 unsafe extern "C" fn merge_rects(a: RenRect, b: RenRect) -> RenRect {
@@ -114,15 +115,14 @@ unsafe extern "C" fn merge_rects(a: RenRect, b: RenRect) -> RenRect {
     let y1: libc::c_int = min(a.y, b.y);
     let x2: libc::c_int = max(a.x + a.width, b.x + b.width);
     let y2: libc::c_int = max(a.y + a.height, b.y + b.height);
-    return {
-        let init = RenRect {
+    {
+        RenRect {
             x: x1,
             y: y1,
             width: x2 - x1,
             height: y2 - y1,
-        };
-        init
-    };
+        }
+    }
 }
 
 unsafe extern "C" fn push_command(type_0: libc::c_int, size: libc::c_int) -> *mut Command {
@@ -131,17 +131,17 @@ unsafe extern "C" fn push_command(type_0: libc::c_int, size: libc::c_int) -> *mu
     let n: libc::c_int = COMMAND_BUF_IDX + size;
     if n > 1024 as libc::c_int * 512 as libc::c_int {
         eprintln!("Warning: (src/rencache.rs): exhausted command buffer");
-        return 0 as *mut Command;
+        return ptr::null_mut();
     }
     COMMAND_BUF_IDX = n;
     libc::memset(
         cmd as *mut libc::c_void,
         0 as libc::c_int,
-        ::std::mem::size_of::<Command>(),
+        mem::size_of::<Command>(),
     );
     (*cmd).type_0 = type_0;
     (*cmd).size = size;
-    return cmd;
+    cmd
 }
 
 unsafe extern "C" fn next_command(prev: *mut *mut Command) -> bool {
@@ -150,7 +150,7 @@ unsafe extern "C" fn next_command(prev: *mut *mut Command) -> bool {
     } else {
         *prev = (*prev as *mut libc::c_char).offset((**prev).size as isize) as *mut Command;
     }
-    return *prev != COMMAND_BUF.as_mut_ptr().offset(COMMAND_BUF_IDX as isize) as *mut Command;
+    *prev != COMMAND_BUF.as_mut_ptr().offset(COMMAND_BUF_IDX as isize) as *mut Command
 }
 
 #[no_mangle]
@@ -162,10 +162,10 @@ pub unsafe extern "C" fn rencache_show_debug(enable: bool) {
 pub unsafe extern "C" fn rencache_free_font(font: *mut RenFont) {
     let cmd: *mut Command = push_command(
         FREE_FONT as libc::c_int,
-        ::std::mem::size_of::<Command>() as libc::c_ulong as libc::c_int,
+        mem::size_of::<Command>() as libc::c_ulong as libc::c_int,
     );
     if !cmd.is_null() {
-        let ref mut fresh2 = (*cmd).font;
+        let fresh2 = &mut (*cmd).font;
         *fresh2 = font;
     }
 }
@@ -174,7 +174,7 @@ pub unsafe extern "C" fn rencache_free_font(font: *mut RenFont) {
 pub unsafe extern "C" fn rencache_set_clip_rect(rect: RenRect) {
     let mut cmd: *mut Command = push_command(
         SET_CLIP as libc::c_int,
-        ::std::mem::size_of::<Command>() as libc::c_ulong as libc::c_int,
+        mem::size_of::<Command>() as libc::c_ulong as libc::c_int,
     );
     if !cmd.is_null() {
         (*cmd).rect = intersect_rects(rect, SCREEN_RECT);
@@ -188,7 +188,7 @@ pub unsafe extern "C" fn rencache_draw_rect(rect: RenRect, color: RenColor) {
     }
     let mut cmd: *mut Command = push_command(
         DRAW_RECT as libc::c_int,
-        ::std::mem::size_of::<Command>() as libc::c_ulong as libc::c_int,
+        mem::size_of::<Command>() as libc::c_ulong as libc::c_int,
     );
     if !cmd.is_null() {
         (*cmd).rect = rect;
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn rencache_draw_text(
         let sz = (libc::strlen(text)).wrapping_add(1);
         let mut cmd: *mut Command = push_command(
             DRAW_TEXT as libc::c_int,
-            (::std::mem::size_of::<Command>() as libc::c_ulong).wrapping_add(sz as libc::c_ulong)
+            (mem::size_of::<Command>() as libc::c_ulong).wrapping_add(sz as libc::c_ulong)
                 as libc::c_int,
         );
         if !cmd.is_null() {
@@ -228,12 +228,12 @@ pub unsafe extern "C" fn rencache_draw_text(
                 sz,
             );
             (*cmd).color = color;
-            let ref mut fresh3 = (*cmd).font;
+            let fresh3 = &mut (*cmd).font;
             *fresh3 = font;
             (*cmd).rect = rect;
         }
     }
-    return x + rect.width;
+    x + rect.width
 }
 
 #[no_mangle]
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn rencache_invalidate() {
     libc::memset(
         CELLS_PREV as *mut libc::c_void,
         0xff as libc::c_int,
-        ::std::mem::size_of::<[libc::c_uint; 4000]>(),
+        mem::size_of::<[libc::c_uint; 4000]>(),
     );
 }
 
@@ -270,7 +270,7 @@ unsafe extern "C" fn update_overlapping_cells(r: RenRect, mut h: libc::c_uint) {
             hash(
                 &mut *CELLS.offset(idx as isize),
                 &mut h as *mut libc::c_uint as *const libc::c_void,
-                ::std::mem::size_of::<libc::c_uint>() as libc::c_ulong as libc::c_int,
+                mem::size_of::<libc::c_uint>() as libc::c_ulong as libc::c_int,
             );
             x += 1;
         }
@@ -289,13 +289,13 @@ unsafe extern "C" fn push_rect(r: RenRect, count: *mut libc::c_int) {
         i -= 1;
     }
     let fresh4 = *count;
-    *count = *count + 1;
+    *count += 1;
     RECT_BUF[fresh4 as usize] = r;
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rencache_end_frame() {
-    let mut cmd: *mut Command = 0 as *mut Command;
+    let mut cmd: *mut Command = ptr::null_mut();
     let mut cr: RenRect = SCREEN_RECT;
     while next_command(&mut cmd) {
         if (*cmd).type_0 == SET_CLIP as libc::c_int {
@@ -320,13 +320,12 @@ pub unsafe extern "C" fn rencache_end_frame() {
             if *CELLS.offset(idx as isize) != *CELLS_PREV.offset(idx as isize) {
                 push_rect(
                     {
-                        let init = RenRect {
-                            x: x,
-                            y: y,
+                        RenRect {
+                            x,
+                            y,
                             width: 1 as libc::c_int,
                             height: 1 as libc::c_int,
-                        };
-                        init
+                        }
                     },
                     &mut rect_count,
                 );
@@ -351,7 +350,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
     while i_0 < rect_count {
         let r_1: RenRect = RECT_BUF[i_0 as usize];
         ren_set_clip_rect(r_1);
-        cmd = 0 as *mut Command;
+        cmd = ptr::null_mut();
         while next_command(&mut cmd) {
             match (*cmd).type_0 {
                 0 => {
@@ -377,13 +376,12 @@ pub unsafe extern "C" fn rencache_end_frame() {
         }
         if SHOW_DEBUG {
             let color: RenColor = {
-                let init = RenColor {
+                RenColor {
                     b: libc::rand() as u8,
                     g: libc::rand() as u8,
                     r: libc::rand() as u8,
                     a: 50 as libc::c_int as u8,
-                };
-                init
+                }
             };
             ren_draw_rect(r_1, color);
         }
@@ -393,15 +391,13 @@ pub unsafe extern "C" fn rencache_end_frame() {
         ren_update_rects(RECT_BUF.as_mut_ptr(), rect_count);
     }
     if has_free_commands {
-        cmd = 0 as *mut Command;
+        cmd = ptr::null_mut();
         while next_command(&mut cmd) {
             if (*cmd).type_0 == FREE_FONT as libc::c_int {
                 ren_free_font((*cmd).font);
             }
         }
     }
-    let tmp: *mut libc::c_uint = CELLS;
-    CELLS = CELLS_PREV;
-    CELLS_PREV = tmp;
+    mem::swap(&mut CELLS, &mut CELLS_PREV);
     COMMAND_BUF_IDX = 0 as libc::c_int;
 }

@@ -7,7 +7,7 @@ use crate::{
     renderer::{ren_get_size, RenColor, RenFont, RenRect},
 };
 use lua_sys::*;
-use std::ptr;
+use std::{mem, ptr};
 
 unsafe extern "C" fn checkcolor(
     state: *mut lua_State,
@@ -21,14 +21,11 @@ unsafe extern "C" fn checkcolor(
         a: 0,
     };
     if lua_type(state, idx) <= 0 as libc::c_int {
-        return {
-            let init = RenColor {
-                b: def as u8,
-                g: def as u8,
-                r: def as u8,
-                a: 255 as libc::c_int as u8,
-            };
-            init
+        return RenColor {
+            b: def as u8,
+            g: def as u8,
+            r: def as u8,
+            a: 255 as libc::c_int as u8,
         };
     }
     lua_rawgeti(state, idx, 1);
@@ -40,13 +37,13 @@ unsafe extern "C" fn checkcolor(
     color.b = luaL_checknumber(state, -(2 as libc::c_int)) as u8;
     color.a = luaL_optnumber(state, -(1 as libc::c_int), 255 as libc::c_int as lua_Number) as u8;
     lua_settop(state, -(4 as libc::c_int) - 1 as libc::c_int);
-    return color;
+    color
 }
 
 unsafe extern "C" fn f_show_debug(state: *mut lua_State) -> libc::c_int {
     luaL_checkany(state, 1 as libc::c_int);
     rencache_show_debug(lua_toboolean(state, 1 as libc::c_int) != 0);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_get_size(state: *mut lua_State) -> libc::c_int {
@@ -55,17 +52,17 @@ unsafe extern "C" fn f_get_size(state: *mut lua_State) -> libc::c_int {
     ren_get_size(&mut w, &mut h);
     lua_pushnumber(state, w as lua_Number);
     lua_pushnumber(state, h as lua_Number);
-    return 2 as libc::c_int;
+    2 as libc::c_int
 }
 
 unsafe extern "C" fn f_begin_frame(_: *mut lua_State) -> libc::c_int {
     rencache_begin_frame();
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_end_frame(_: *mut lua_State) -> libc::c_int {
     rencache_end_frame();
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_set_clip_rect(state: *mut lua_State) -> libc::c_int {
@@ -80,7 +77,7 @@ unsafe extern "C" fn f_set_clip_rect(state: *mut lua_State) -> libc::c_int {
     rect.width = luaL_checknumber(state, 3 as libc::c_int) as libc::c_int;
     rect.height = luaL_checknumber(state, 4 as libc::c_int) as libc::c_int;
     rencache_set_clip_rect(rect);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_draw_rect(state: *mut lua_State) -> libc::c_int {
@@ -96,7 +93,7 @@ unsafe extern "C" fn f_draw_rect(state: *mut lua_State) -> libc::c_int {
     rect.height = luaL_checknumber(state, 4 as libc::c_int) as libc::c_int;
     let color: RenColor = checkcolor(state, 5 as libc::c_int, 255 as libc::c_int);
     rencache_draw_rect(rect, color);
-    return 0 as libc::c_int;
+    0 as libc::c_int
 }
 
 unsafe extern "C" fn f_draw_text(state: *mut lua_State) -> libc::c_int {
@@ -111,65 +108,41 @@ unsafe extern "C" fn f_draw_text(state: *mut lua_State) -> libc::c_int {
     let color: RenColor = checkcolor(state, 5 as libc::c_int, 255 as libc::c_int);
     x = rencache_draw_text(*font, text, x, y, color);
     lua_pushnumber(state, x as lua_Number);
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
 
 static mut LIB: [luaL_Reg; 8] = [
-    {
-        let init = luaL_Reg {
-            name: b"show_debug\0" as *const u8 as *const libc::c_char,
-            func: Some(f_show_debug as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"show_debug\0" as *const u8 as *const libc::c_char,
+        func: Some(f_show_debug as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"get_size\0" as *const u8 as *const libc::c_char,
-            func: Some(f_get_size as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"get_size\0" as *const u8 as *const libc::c_char,
+        func: Some(f_get_size as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"begin_frame\0" as *const u8 as *const libc::c_char,
-            func: Some(f_begin_frame as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"begin_frame\0" as *const u8 as *const libc::c_char,
+        func: Some(f_begin_frame as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"end_frame\0" as *const u8 as *const libc::c_char,
-            func: Some(f_end_frame as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"end_frame\0" as *const u8 as *const libc::c_char,
+        func: Some(f_end_frame as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"set_clip_rect\0" as *const u8 as *const libc::c_char,
-            func: Some(f_set_clip_rect as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"set_clip_rect\0" as *const u8 as *const libc::c_char,
+        func: Some(f_set_clip_rect as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"draw_rect\0" as *const u8 as *const libc::c_char,
-            func: Some(f_draw_rect as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"draw_rect\0" as *const u8 as *const libc::c_char,
+        func: Some(f_draw_rect as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: b"draw_text\0" as *const u8 as *const libc::c_char,
-            func: Some(f_draw_text as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
-        };
-        init
+    luaL_Reg {
+        name: b"draw_text\0" as *const u8 as *const libc::c_char,
+        func: Some(f_draw_text as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
-    {
-        let init = luaL_Reg {
-            name: 0 as *const libc::c_char,
-            func: None,
-        };
-        init
+    luaL_Reg {
+        name: 0 as *const libc::c_char,
+        func: None,
     },
 ];
 
@@ -178,8 +151,8 @@ pub unsafe extern "C" fn luaopen_renderer(state: *mut lua_State) -> libc::c_int 
     lua_createtable(
         state,
         0 as libc::c_int,
-        (::std::mem::size_of::<[luaL_Reg; 8]>() as libc::c_ulong)
-            .wrapping_div(::std::mem::size_of::<luaL_Reg>() as libc::c_ulong)
+        (mem::size_of::<[luaL_Reg; 8]>() as libc::c_ulong)
+            .wrapping_div(mem::size_of::<luaL_Reg>() as libc::c_ulong)
             .wrapping_sub(1 as libc::c_int as libc::c_ulong) as libc::c_int,
     );
     luaL_setfuncs(state, LIB.as_ptr(), 0 as libc::c_int);
@@ -189,5 +162,5 @@ pub unsafe extern "C" fn luaopen_renderer(state: *mut lua_State) -> libc::c_int 
         -(2 as libc::c_int),
         b"font\0" as *const u8 as *const libc::c_char,
     );
-    return 1 as libc::c_int;
+    1 as libc::c_int
 }
