@@ -4,7 +4,7 @@ use api::api_load_libs;
 use lua_sys::*;
 use renderer::ren_init;
 use sdl2_sys::*;
-use std::{ffi::CString, mem, ptr};
+use std::{mem, ptr};
 
 pub mod api;
 pub mod rencache;
@@ -16432,67 +16432,66 @@ unsafe extern "C" fn init_window_icon() {
     SDL_FreeSurface(surf);
 }
 
-unsafe fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int {
-    SDL_Init(0x20 as libc::c_uint | 0x4000 as libc::c_uint);
-    SDL_EnableScreenSaver();
-    SDL_EventState(
-        SDL_EventType::SDL_DROPFILE as libc::c_int as Uint32,
-        1 as libc::c_int,
-    );
-    atexit(Some(SDL_Quit as unsafe extern "C" fn() -> ()));
-    SDL_SetHint(
-        b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR\0" as *const u8 as *const libc::c_char,
-        b"0\0" as *const u8 as *const libc::c_char,
-    );
-    SDL_SetHint(
-        b"SDL_MOUSE_FOCUS_CLICKTHROUGH\0" as *const u8 as *const libc::c_char,
-        b"1\0" as *const u8 as *const libc::c_char,
-    );
-    let mut dm: SDL_DisplayMode = SDL_DisplayMode {
-        format: 0,
-        w: 0,
-        h: 0,
-        refresh_rate: 0,
-        driverdata: ptr::null_mut(),
-    };
-    SDL_GetCurrentDisplayMode(0 as libc::c_int, &mut dm);
-    window = SDL_CreateWindow(
-        b"\0" as *const u8 as *const libc::c_char,
-        (0x1fff0000 as libc::c_uint | 0 as libc::c_int as libc::c_uint) as libc::c_int,
-        (0x1fff0000 as libc::c_uint | 0 as libc::c_int as libc::c_uint) as libc::c_int,
-        (dm.w as libc::c_double * 0.8f64) as libc::c_int,
-        (dm.h as libc::c_double * 0.8f64) as libc::c_int,
-        (SDL_WindowFlags::SDL_WINDOW_RESIZABLE as libc::c_int
-            | SDL_WindowFlags::SDL_WINDOW_ALLOW_HIGHDPI as libc::c_int
-            | SDL_WindowFlags::SDL_WINDOW_HIDDEN as libc::c_int) as Uint32,
-    );
-    init_window_icon();
-    ren_init(window);
-    let state: *mut lua_State = luaL_newstate();
-    luaL_openlibs(state);
-    api_load_libs(state);
-    lua_createtable(state, 0 as libc::c_int, 0 as libc::c_int);
-    let mut i: libc::c_int = 0 as libc::c_int;
-    while i < argc {
-        lua_pushstring(state, *argv.offset(i as isize));
-        lua_rawseti(state, -(2 as libc::c_int), i as libc::c_long + 1);
-        i += 1;
-    }
-    lua_setglobal(state, b"ARGS\0" as *const u8 as *const libc::c_char);
-    lua_pushstring(state, b"1.11\0" as *const u8 as *const libc::c_char);
-    lua_setglobal(state, b"VERSION\0" as *const u8 as *const libc::c_char);
-    lua_pushstring(state, SDL_GetPlatform() as *const libc::c_char);
-    lua_setglobal(state, b"PLATFORM\0" as *const u8 as *const libc::c_char);
-    lua_pushnumber(state, get_scale());
-    lua_setglobal(state, b"SCALE\0" as *const u8 as *const libc::c_char);
-    let mut exename: [libc::c_char; 2048] = [0; 2048];
-    get_exe_filename(
-        exename.as_mut_ptr(),
-        mem::size_of::<[libc::c_char; 2048]>() as libc::c_ulong as libc::c_int,
-    );
-    lua_pushstring(state, exename.as_mut_ptr());
-    lua_setglobal(state, b"EXEFILE\0" as *const u8 as *const libc::c_char);
-    let _ = luaL_loadstring(
+fn main() {
+    unsafe {
+        SDL_Init(0x20 as libc::c_uint | 0x4000 as libc::c_uint);
+        SDL_EnableScreenSaver();
+        SDL_EventState(
+            SDL_EventType::SDL_DROPFILE as libc::c_int as Uint32,
+            1 as libc::c_int,
+        );
+        atexit(Some(SDL_Quit as unsafe extern "C" fn() -> ()));
+        SDL_SetHint(
+            b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR\0" as *const u8 as *const libc::c_char,
+            b"0\0" as *const u8 as *const libc::c_char,
+        );
+        SDL_SetHint(
+            b"SDL_MOUSE_FOCUS_CLICKTHROUGH\0" as *const u8 as *const libc::c_char,
+            b"1\0" as *const u8 as *const libc::c_char,
+        );
+        let mut dm: SDL_DisplayMode = SDL_DisplayMode {
+            format: 0,
+            w: 0,
+            h: 0,
+            refresh_rate: 0,
+            driverdata: ptr::null_mut(),
+        };
+        SDL_GetCurrentDisplayMode(0 as libc::c_int, &mut dm);
+        window = SDL_CreateWindow(
+            b"\0" as *const u8 as *const libc::c_char,
+            (0x1fff0000 as libc::c_uint | 0 as libc::c_int as libc::c_uint) as libc::c_int,
+            (0x1fff0000 as libc::c_uint | 0 as libc::c_int as libc::c_uint) as libc::c_int,
+            (dm.w as libc::c_double * 0.8f64) as libc::c_int,
+            (dm.h as libc::c_double * 0.8f64) as libc::c_int,
+            (SDL_WindowFlags::SDL_WINDOW_RESIZABLE as libc::c_int
+                | SDL_WindowFlags::SDL_WINDOW_ALLOW_HIGHDPI as libc::c_int
+                | SDL_WindowFlags::SDL_WINDOW_HIDDEN as libc::c_int) as Uint32,
+        );
+        init_window_icon();
+        ren_init(window);
+        let state: *mut lua_State = luaL_newstate();
+        luaL_openlibs(state);
+        api_load_libs(state);
+        lua_createtable(state, 0 as libc::c_int, 0 as libc::c_int);
+        for (i, arg) in std::env::args().enumerate() {
+            lua_pushstring(state, arg.as_ptr() as *const libc::c_char);
+            lua_rawseti(state, -(2 as libc::c_int), i as libc::c_long + 1);
+        }
+        lua_setglobal(state, b"ARGS\0" as *const u8 as *const libc::c_char);
+        lua_pushstring(state, b"1.11\0" as *const u8 as *const libc::c_char);
+        lua_setglobal(state, b"VERSION\0" as *const u8 as *const libc::c_char);
+        lua_pushstring(state, SDL_GetPlatform() as *const libc::c_char);
+        lua_setglobal(state, b"PLATFORM\0" as *const u8 as *const libc::c_char);
+        lua_pushnumber(state, get_scale());
+        lua_setglobal(state, b"SCALE\0" as *const u8 as *const libc::c_char);
+        let mut exename: [libc::c_char; 2048] = [0; 2048];
+        get_exe_filename(
+            exename.as_mut_ptr(),
+            mem::size_of::<[libc::c_char; 2048]>() as libc::c_ulong as libc::c_int,
+        );
+        lua_pushstring(state, exename.as_mut_ptr());
+        lua_setglobal(state, b"EXEFILE\0" as *const u8 as *const libc::c_char);
+        let _ = luaL_loadstring(
         state,
         b"local core\nxpcall(function()\n  SCALE = tonumber(os.getenv(\"LITE_SCALE\")) or SCALE\n  PATHSEP = package.config:sub(1, 1)\n  EXEDIR = EXEFILE:match(\"^(.+)[/\\\\].*$\")\n  package.path = EXEDIR .. '/data/?.lua;' .. package.path\n  package.path = EXEDIR .. '/data/?/init.lua;' .. package.path\n  core = require('core')\n  core.init()\n  core.run()\nend, function(err)\n  print('Error: ' .. tostring(err))\n  print(debug.traceback(nil, 2))\n  if core and core.on_error then\n    pcall(core.on_error, err)\n  end\n  os.exit(1)\nend)\0"
             as *const u8 as *const libc::c_char,
@@ -16505,25 +16504,7 @@ unsafe fn main_0(argc: libc::c_int, argv: *mut *mut libc::c_char) -> libc::c_int
             0,
             Option::None,
         ) != 0;
-    lua_close(state);
-    SDL_DestroyWindow(window);
-    0 as libc::c_int
-}
-
-fn main() {
-    let mut args: Vec<*mut libc::c_char> = Vec::new();
-    for arg in std::env::args() {
-        args.push(
-            (CString::new(arg))
-                .expect("Failed to convert argument into CString.")
-                .into_raw(),
-        );
-    }
-    args.push(ptr::null_mut());
-    unsafe {
-        std::process::exit(main_0(
-            (args.len() - 1) as libc::c_int,
-            args.as_mut_ptr() as *mut *mut libc::c_char,
-        ) as i32)
+        lua_close(state);
+        SDL_DestroyWindow(window);
     }
 }
