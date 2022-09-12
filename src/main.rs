@@ -20,13 +20,8 @@ unsafe extern "C" fn get_scale() -> libc::c_double {
 }
 
 unsafe extern "C" fn get_exe_filename(buf: *mut libc::c_char, sz: libc::c_int) {
-    let mut path: [libc::c_char; 512] = [0; 512];
-    libc::sprintf(
-        path.as_mut_ptr(),
-        b"/proc/%d/exe\0" as *const u8 as *const libc::c_char,
-        libc::getpid(),
-    );
-    let len: libc::c_int = libc::readlink(path.as_mut_ptr(), buf, sz as usize - 1) as libc::c_int;
+    let path = format!("/proc/{}/exe\0", libc::getpid());
+    let len: libc::c_int = libc::readlink(path.as_ptr() as *const libc::c_char, buf, sz as usize - 1) as libc::c_int;
     *buf.offset(len as isize) = '\0' as i32 as libc::c_char;
 }
 

@@ -2,6 +2,7 @@ use crate::{rencache::rencache_invalidate, window};
 use lua_sys::*;
 use sdl2_sys::*;
 use std::{
+    ffi::CStr,
     mem::{self, MaybeUninit},
     ptr,
 };
@@ -402,16 +403,9 @@ unsafe extern "C" fn f_sleep(state: *mut lua_State) -> libc::c_int {
 unsafe extern "C" fn f_exec(state: *mut lua_State) -> libc::c_int {
     let mut len = 0;
     let cmd: *const libc::c_char = luaL_checklstring(state, 1 as libc::c_int, &mut len);
-    let buf: *mut libc::c_char = malloc(len.wrapping_add(32) as libc::c_ulong) as *mut libc::c_char;
-    if buf.is_null() {
-        luaL_error(
-            state,
-            b"buffer allocation failed\0" as *const u8 as *const libc::c_char,
-        );
-    }
-    libc::sprintf(buf, b"%s &\0" as *const u8 as *const libc::c_char, cmd);
-    let _: libc::c_int = system(buf);
-    free(buf as *mut libc::c_void);
+    let cmd = CStr::from_ptr(cmd).to_str().unwrap();
+    let buf = format!("{} &\0", cmd);
+    let _: libc::c_int = system(buf.as_ptr() as *const libc::c_char);
     0 as libc::c_int
 }
 
