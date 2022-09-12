@@ -1,5 +1,6 @@
 use lua_sys::*;
 use renderer::luaopen_renderer;
+use std::ptr;
 use system::luaopen_system;
 
 mod renderer;
@@ -16,7 +17,7 @@ static mut LIBS: [luaL_Reg; 3] = [
         func: Some(luaopen_renderer as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
     luaL_Reg {
-        name: 0 as *const libc::c_char,
+        name: ptr::null(),
         func: None,
     },
 ];

@@ -11,7 +11,7 @@ pub mod rencache;
 pub mod renderer;
 
 #[no_mangle]
-pub static mut window: *mut SDL_Window = 0 as *const SDL_Window as *mut SDL_Window;
+pub static mut window: *mut SDL_Window = ptr::null_mut();
 
 unsafe extern "C" fn get_scale() -> libc::c_double {
     let mut dpi: libc::c_float = 0.;

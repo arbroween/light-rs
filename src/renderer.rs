@@ -54,7 +54,7 @@ pub struct C2RustUnnamed {
     pub bottom: libc::c_int,
 }
 
-static mut WINDOW: *mut SDL_Window = 0 as *const SDL_Window as *mut SDL_Window;
+static mut WINDOW: *mut SDL_Window = ptr::null_mut();
 
 static mut CLIP: C2RustUnnamed = C2RustUnnamed {
     left: 0,

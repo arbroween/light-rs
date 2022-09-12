@@ -141,7 +141,7 @@ static mut LIB: [luaL_Reg; 8] = [
         func: Some(f_draw_text as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
     luaL_Reg {
-        name: 0 as *const libc::c_char,
+        name: ptr::null(),
         func: None,
     },
 ];

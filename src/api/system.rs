@@ -147,7 +147,7 @@ unsafe extern "C" fn f_wait_event(state: *mut lua_State) -> libc::c_int {
     1 as libc::c_int
 }
 
-static mut CURSOR_CACHE: [*mut SDL_Cursor; 12] = [0 as *const SDL_Cursor as *mut SDL_Cursor; 12];
+static mut CURSOR_CACHE: [*mut SDL_Cursor; 12] = [ptr::null_mut(); 12];
 
 static mut CURSOR_OPTS: [*const libc::c_char; 6] = [
     b"arrow\0" as *const u8 as *const libc::c_char,
@@ -155,7 +155,7 @@ static mut CURSOR_OPTS: [*const libc::c_char; 6] = [
     b"sizeh\0" as *const u8 as *const libc::c_char,
     b"sizev\0" as *const u8 as *const libc::c_char,
     b"hand\0" as *const u8 as *const libc::c_char,
-    0 as *const libc::c_char,
+    ptr::null(),
 ];
 
 static mut CURSOR_ENUMS: [SDL_SystemCursor; 5] = [
@@ -193,7 +193,7 @@ static mut WINDOW_OPTS: [*const libc::c_char; 4] = [
     b"normal\0" as *const u8 as *const libc::c_char,
     b"maximized\0" as *const u8 as *const libc::c_char,
     b"fullscreen\0" as *const u8 as *const libc::c_char,
-    0 as *const libc::c_char,
+    ptr::null(),
 ];
 
 unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> libc::c_int {
@@ -518,7 +518,7 @@ static mut LIB: [luaL_Reg; 18] = [
         func: Some(f_fuzzy_match as unsafe extern "C" fn(*mut lua_State) -> libc::c_int),
     },
     luaL_Reg {
-        name: 0 as *const libc::c_char,
+        name: ptr::null(),
         func: Option::None,
     },
 ];
