@@ -4,7 +4,12 @@ use api::api_load_libs;
 use lua_sys::*;
 use renderer::ren_init;
 use sdl2_sys::*;
-use std::{mem, ptr};
+use std::{
+    ffi::OsString,
+    fs, mem,
+    os::raw::{c_char, c_double, c_int, c_long, c_uchar, c_void},
+    ptr,
+};
 
 pub mod api;
 pub mod rencache;
@@ -13,20 +18,40 @@ pub mod renderer;
 #[no_mangle]
 pub static mut window: *mut SDL_Window = ptr::null_mut();
 
-unsafe extern "C" fn get_scale() -> libc::c_double {
+unsafe extern "C" fn get_scale() -> c_double {
     let mut dpi = 0.0;
     SDL_GetDisplayDPI(0, ptr::null_mut(), &mut dpi, ptr::null_mut());
     1.0
 }
 
-unsafe extern "C" fn get_exe_filename(buf: *mut libc::c_char, sz: libc::c_int) {
-    let path = format!("/proc/{}/exe\0", libc::getpid());
-    let len = libc::readlink(path.as_ptr() as *const libc::c_char, buf, sz as usize - 1);
-    *buf.offset(len) = '\0' as libc::c_char;
+unsafe extern "C" fn get_exe_filename(buf: *mut c_char, sz: c_int) {
+    let path = format!("/proc/{}/exe", std::process::id());
+    if let Ok(target) = fs::read_link(path) {
+        let bytes = target.to_string_lossy();
+        let len = bytes.len().min(sz as usize - 1);
+        bytes.as_ptr().copy_to_nonoverlapping(buf as *mut u8, len);
+        *buf.add(len) = 0;
+    }
+}
+
+#[cfg(windows)]
+unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
+    use std::os::windows::ffi::OsStringExt;
+    OsString::from_wide(filename)
+}
+
+#[cfg(unix)]
+unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
+    use std::{
+        ffi::{CStr, OsStr},
+        os::unix::ffi::OsStrExt,
+    };
+
+    OsStr::from_bytes(CStr::from_ptr(filename).to_bytes()).to_owned()
 }
 
 unsafe extern "C" fn init_window_icon() {
-    static mut ICON_RGBA: [libc::c_uchar; 16384] = [
+    static mut ICON_RGBA: [c_uchar; 16384] = [
         0x2e, 0x2e, 0x32, 0x6d, 0x2e, 0x2e, 0x32, 0xe4, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32,
         0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e,
         0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e,
@@ -1122,7 +1147,7 @@ unsafe extern "C" fn init_window_icon() {
         0x2e, 0x2e, 0x32, 0x6e,
     ];
     let surf: *mut SDL_Surface = SDL_CreateRGBSurfaceFrom(
-        ICON_RGBA.as_mut_ptr() as *mut libc::c_void,
+        ICON_RGBA.as_mut_ptr() as *mut c_void,
         64,
         64,
         32,
@@ -1143,12 +1168,12 @@ fn main() {
         SDL_EventState(SDL_EventType::SDL_DROPFILE as u32, 1);
         atexit(Some(SDL_Quit));
         SDL_SetHint(
-            b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR\0" as *const u8 as *const libc::c_char,
-            b"0\0" as *const u8 as *const libc::c_char,
+            b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR\0" as *const u8 as *const c_char,
+            b"0\0" as *const u8 as *const c_char,
         );
         SDL_SetHint(
-            b"SDL_MOUSE_FOCUS_CLICKTHROUGH\0" as *const u8 as *const libc::c_char,
-            b"1\0" as *const u8 as *const libc::c_char,
+            b"SDL_MOUSE_FOCUS_CLICKTHROUGH\0" as *const u8 as *const c_char,
+            b"1\0" as *const u8 as *const c_char,
         );
         let mut dm: SDL_DisplayMode = SDL_DisplayMode {
             format: 0,
@@ -1159,11 +1184,11 @@ fn main() {
         };
         SDL_GetCurrentDisplayMode(0, &mut dm);
         window = SDL_CreateWindow(
-            b"\0" as *const u8 as *const libc::c_char,
+            b"\0" as *const u8 as *const c_char,
             0x1fff0000 | 0,
             0x1fff0000 | 0,
-            (f64::from(dm.w) * 0.8) as libc::c_int,
-            (f64::from(dm.h) * 0.8) as libc::c_int,
+            (f64::from(dm.w) * 0.8) as c_int,
+            (f64::from(dm.h) * 0.8) as c_int,
             SDL_WindowFlags::SDL_WINDOW_RESIZABLE as u32
                 | SDL_WindowFlags::SDL_WINDOW_ALLOW_HIGHDPI as u32
                 | SDL_WindowFlags::SDL_WINDOW_HIDDEN as u32,
@@ -1175,27 +1200,27 @@ fn main() {
         api_load_libs(state);
         lua_createtable(state, 0, 0);
         for (i, arg) in std::env::args().enumerate() {
-            lua_pushstring(state, arg.as_ptr() as *const libc::c_char);
-            lua_rawseti(state, -2, i as libc::c_long + 1);
+            lua_pushstring(state, arg.as_ptr() as *const c_char);
+            lua_rawseti(state, -2, i as c_long + 1);
         }
-        lua_setglobal(state, b"ARGS\0" as *const u8 as *const libc::c_char);
-        lua_pushstring(state, b"1.11\0" as *const u8 as *const libc::c_char);
-        lua_setglobal(state, b"VERSION\0" as *const u8 as *const libc::c_char);
+        lua_setglobal(state, b"ARGS\0" as *const u8 as *const c_char);
+        lua_pushstring(state, b"1.11\0" as *const u8 as *const c_char);
+        lua_setglobal(state, b"VERSION\0" as *const u8 as *const c_char);
         lua_pushstring(state, SDL_GetPlatform());
-        lua_setglobal(state, b"PLATFORM\0" as *const u8 as *const libc::c_char);
+        lua_setglobal(state, b"PLATFORM\0" as *const u8 as *const c_char);
         lua_pushnumber(state, get_scale());
-        lua_setglobal(state, b"SCALE\0" as *const u8 as *const libc::c_char);
-        let mut exename: [libc::c_char; 2048] = [0; 2048];
+        lua_setglobal(state, b"SCALE\0" as *const u8 as *const c_char);
+        let mut exename: [c_char; 2048] = [0; 2048];
         get_exe_filename(
             exename.as_mut_ptr(),
-            mem::size_of::<[libc::c_char; 2048]>() as libc::c_int,
+            mem::size_of::<[c_char; 2048]>() as c_int,
         );
         lua_pushstring(state, exename.as_mut_ptr());
-        lua_setglobal(state, b"EXEFILE\0" as *const u8 as *const libc::c_char);
+        lua_setglobal(state, b"EXEFILE\0" as *const u8 as *const c_char);
         let _ = luaL_loadstring(
         state,
         b"local core\nxpcall(function()\n  SCALE = tonumber(os.getenv(\"LITE_SCALE\")) or SCALE\n  PATHSEP = package.config:sub(1, 1)\n  EXEDIR = EXEFILE:match(\"^(.+)[/\\\\].*$\")\n  package.path = EXEDIR .. '/data/?.lua;' .. package.path\n  package.path = EXEDIR .. '/data/?/init.lua;' .. package.path\n  core = require('core')\n  core.init()\n  core.run()\nend, function(err)\n  print('Error: ' .. tostring(err))\n  print(debug.traceback(nil, 2))\n  if core and core.on_error then\n    pcall(core.on_error, err)\n  end\n  os.exit(1)\nend)\0"
-            as *const u8 as *const libc::c_char,
+            as *const u8 as *const c_char,
     ) != 0
         || lua_pcallk(
             state,
