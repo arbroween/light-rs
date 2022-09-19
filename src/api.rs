@@ -1,35 +1,27 @@
+use crate::c_str;
 use lua_sys::*;
 use renderer::luaopen_renderer;
-use std::{
-    os::raw::{c_char, c_int},
-    ptr,
-};
+use std::os::raw::c_int;
 use system::luaopen_system;
 
 mod renderer;
 mod renderer_font;
 mod system;
 
-static mut LIBS: [luaL_Reg; 3] = [
+static mut LIBS: [luaL_Reg; 2] = [
     luaL_Reg {
-        name: b"system\0" as *const u8 as *const c_char,
+        name: c_str!("system"),
         func: Some(luaopen_system),
     },
     luaL_Reg {
-        name: b"renderer\0" as *const u8 as *const c_char,
+        name: c_str!("renderer"),
         func: Some(luaopen_renderer),
-    },
-    luaL_Reg {
-        name: ptr::null(),
-        func: None,
     },
 ];
 
 #[no_mangle]
 pub unsafe extern "C" fn api_load_libs(state: *mut lua_State) {
-    let mut i = 0;
-    while !(LIBS[i].name).is_null() {
-        luaL_requiref(state, LIBS[i].name, LIBS[i].func, 1 as c_int);
-        i += 1;
+    for lib in &LIBS {
+        luaL_requiref(state, lib.name, lib.func, 1 as c_int);
     }
 }

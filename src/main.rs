@@ -8,12 +8,19 @@ use std::{
     ffi::OsString,
     fs, mem,
     os::raw::{c_char, c_double, c_int, c_long, c_uchar, c_void},
-    ptr,
+    ptr, slice,
 };
 
 pub mod api;
 pub mod rencache;
 pub mod renderer;
+
+macro_rules! c_str {
+    ($lit:expr) => {
+        concat!($lit, "\0").as_ptr() as *const ::std::os::raw::c_char
+    };
+}
+pub(crate) use c_str;
 
 #[no_mangle]
 pub static mut window: *mut SDL_Window = ptr::null_mut();
@@ -25,12 +32,13 @@ unsafe extern "C" fn get_scale() -> c_double {
 }
 
 unsafe extern "C" fn get_exe_filename(buf: *mut c_char, sz: c_int) {
+    let buf = slice::from_raw_parts_mut(buf as *mut u8, sz as usize);
     let path = format!("/proc/{}/exe", std::process::id());
     if let Ok(target) = fs::read_link(path) {
         let bytes = target.to_string_lossy();
         let len = bytes.len().min(sz as usize - 1);
-        bytes.as_ptr().copy_to_nonoverlapping(buf as *mut u8, len);
-        *buf.add(len) = 0;
+        buf[0..len].copy_from_slice(bytes.as_ref().as_bytes());
+        buf[len] = 0;
     }
 }
 
@@ -1168,13 +1176,10 @@ fn main() {
         SDL_EventState(SDL_EventType::SDL_DROPFILE as u32, 1);
         atexit(Some(SDL_Quit));
         SDL_SetHint(
-            b"SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR\0" as *const u8 as *const c_char,
-            b"0\0" as *const u8 as *const c_char,
+            c_str!("SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR"),
+            c_str!("0"),
         );
-        SDL_SetHint(
-            b"SDL_MOUSE_FOCUS_CLICKTHROUGH\0" as *const u8 as *const c_char,
-            b"1\0" as *const u8 as *const c_char,
-        );
+        SDL_SetHint(c_str!("SDL_MOUSE_FOCUS_CLICKTHROUGH"), c_str!("1"));
         let mut dm: SDL_DisplayMode = SDL_DisplayMode {
             format: 0,
             w: 0,
@@ -1184,9 +1189,9 @@ fn main() {
         };
         SDL_GetCurrentDisplayMode(0, &mut dm);
         window = SDL_CreateWindow(
-            b"\0" as *const u8 as *const c_char,
-            0x1fff0000 | 0,
-            0x1fff0000 | 0,
+            c_str!(""),
+            0x1fff0000,
+            0x1fff0000,
             (f64::from(dm.w) * 0.8) as c_int,
             (f64::from(dm.h) * 0.8) as c_int,
             SDL_WindowFlags::SDL_WINDOW_RESIZABLE as u32
@@ -1203,24 +1208,23 @@ fn main() {
             lua_pushstring(state, arg.as_ptr() as *const c_char);
             lua_rawseti(state, -2, i as c_long + 1);
         }
-        lua_setglobal(state, b"ARGS\0" as *const u8 as *const c_char);
-        lua_pushstring(state, b"1.11\0" as *const u8 as *const c_char);
-        lua_setglobal(state, b"VERSION\0" as *const u8 as *const c_char);
+        lua_setglobal(state, c_str!("ARGS"));
+        lua_pushstring(state, c_str!("1.11"));
+        lua_setglobal(state, c_str!("VERSION"));
         lua_pushstring(state, SDL_GetPlatform());
-        lua_setglobal(state, b"PLATFORM\0" as *const u8 as *const c_char);
+        lua_setglobal(state, c_str!("PLATFORM"));
         lua_pushnumber(state, get_scale());
-        lua_setglobal(state, b"SCALE\0" as *const u8 as *const c_char);
+        lua_setglobal(state, c_str!("SCALE"));
         let mut exename: [c_char; 2048] = [0; 2048];
         get_exe_filename(
             exename.as_mut_ptr(),
             mem::size_of::<[c_char; 2048]>() as c_int,
         );
         lua_pushstring(state, exename.as_mut_ptr());
-        lua_setglobal(state, b"EXEFILE\0" as *const u8 as *const c_char);
+        lua_setglobal(state, c_str!("EXEFILE"));
         let _ = luaL_loadstring(
         state,
-        b"local core\nxpcall(function()\n  SCALE = tonumber(os.getenv(\"LITE_SCALE\")) or SCALE\n  PATHSEP = package.config:sub(1, 1)\n  EXEDIR = EXEFILE:match(\"^(.+)[/\\\\].*$\")\n  package.path = EXEDIR .. '/data/?.lua;' .. package.path\n  package.path = EXEDIR .. '/data/?/init.lua;' .. package.path\n  core = require('core')\n  core.init()\n  core.run()\nend, function(err)\n  print('Error: ' .. tostring(err))\n  print(debug.traceback(nil, 2))\n  if core and core.on_error then\n    pcall(core.on_error, err)\n  end\n  os.exit(1)\nend)\0"
-            as *const u8 as *const c_char,
+        c_str!("local core\nxpcall(function()\n  SCALE = tonumber(os.getenv(\"LITE_SCALE\")) or SCALE\n  PATHSEP = package.config:sub(1, 1)\n  EXEDIR = EXEFILE:match(\"^(.+)[/\\\\].*$\")\n  package.path = EXEDIR .. '/data/?.lua;' .. package.path\n  package.path = EXEDIR .. '/data/?/init.lua;' .. package.path\n  core = require('core')\n  core.init()\n  core.run()\nend, function(err)\n  print('Error: ' .. tostring(err))\n  print(debug.traceback(nil, 2))\n  if core and core.on_error then\n    pcall(core.on_error, err)\n  end\n  os.exit(1)\nend)"),
     ) != 0
         || lua_pcallk(
             state,

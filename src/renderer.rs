@@ -2,9 +2,10 @@ use crate::os_string_from_ptr;
 use sdl2_sys::*;
 use stb_truetype_rust::*;
 use std::{
+    ffi::CStr,
     fs,
     mem::{self, MaybeUninit},
-    os::raw::{c_char, c_double, c_float, c_int, c_uchar, c_uint, c_void},
+    os::raw::{c_char, c_double, c_float, c_int, c_uchar},
     ptr, slice,
 };
 
@@ -16,7 +17,7 @@ pub struct RenImage {
     pub height: c_int,
 }
 
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Hash)]
 #[repr(C)]
 pub struct RenColor {
     pub b: u8,
@@ -25,10 +26,21 @@ pub struct RenColor {
     pub a: u8,
 }
 
+impl RenColor {
+    pub(super) const fn default() -> Self {
+        Self {
+            b: 0,
+            g: 0,
+            r: 0,
+            a: 0,
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 #[repr(C)]
 pub struct RenFont {
-    pub data: *mut c_void,
+    pub data: *mut u8,
     pub stbfont: stbtt_fontinfo,
     pub sets: [*mut GlyphSet; 256],
     pub size: c_float,
@@ -43,7 +55,7 @@ pub struct GlyphSet {
     pub glyphs: [stbtt_bakedchar; 256],
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Hash)]
 #[repr(C)]
 pub struct RenRect {
     pub x: c_int,
@@ -86,40 +98,6 @@ impl Clip {
 static mut WINDOW: *mut SDL_Window = ptr::null_mut();
 
 static mut CLIP: Clip = Clip::default();
-
-unsafe extern "C" fn utf8_to_codepoint(mut p: *const c_char, dst: *mut c_uint) -> *const c_char {
-    let mut res: c_uint;
-    let mut n: c_uint;
-    match *p as c_int & 0xf0 {
-        240 => {
-            res = *p as c_uint & 0x7;
-            n = 3;
-        }
-        224 => {
-            res = *p as c_uint & 0xf;
-            n = 2;
-        }
-        208 | 192 => {
-            res = *p as c_uint & 0x1f;
-            n = 1;
-        }
-        _ => {
-            res = *p as c_uint;
-            n = 0;
-        }
-    }
-    loop {
-        let fresh0 = n;
-        n = n.wrapping_sub(1);
-        if fresh0 == 0 {
-            break;
-        }
-        p = p.offset(1);
-        res = res << 6 | (*p as c_uint & 0x3f);
-    }
-    *dst = res;
-    p.offset(1)
-}
 
 #[no_mangle]
 pub unsafe extern "C" fn ren_init(win: *mut SDL_Window) {
@@ -198,7 +176,7 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: c_int) -> *mut Glyph
         let s = stbtt_ScaleForMappingEmToPixels(&mut (*font).stbfont, 1.0)
             / stbtt_ScaleForPixelHeight(&mut (*font).stbfont, 1.0);
         let res = stbtt_BakeFontBitmap(
-            (*font).data as *const c_uchar,
+            (*font).data as *const u8,
             0,
             (*font).size * s,
             (*image).pixels as *mut c_uchar,
@@ -226,22 +204,18 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: c_int) -> *mut Glyph
     );
     let scale = stbtt_ScaleForMappingEmToPixels(&mut (*font).stbfont, (*font).size);
     let scaled_ascent = ((ascent as c_float * scale) as c_double + 0.5f64) as c_int;
-    let mut i = 0;
-    while i < 256 {
-        glyphs[i].yoff += scaled_ascent as c_float;
-        glyphs[i].xadvance = glyphs[i].xadvance.floor();
-        i += 1;
+    for glyph in &mut glyphs {
+        glyph.yoff += scaled_ascent as c_float;
+        glyph.xadvance = glyph.xadvance.floor();
     }
-    let mut i_0 = width * height - 1;
-    while i_0 >= 0 {
-        let n: u8 = *((*image).pixels as *mut u8).offset(i_0 as isize);
-        *((*image).pixels).offset(i_0 as isize) = RenColor {
+    for i in (0..width * height).rev() {
+        let n: u8 = *((*image).pixels as *mut u8).offset(i as isize);
+        *((*image).pixels).offset(i as isize) = RenColor {
             b: 255,
             g: 255,
             r: 255,
             a: n,
         };
-        i_0 -= 1;
     }
     let set = Box::new(GlyphSet { image, glyphs });
     Box::into_raw(set)
@@ -277,7 +251,7 @@ pub unsafe extern "C" fn ren_load_font(filename: *const c_char, size: c_float) -
                 let height = (((ascent - descent + linegap) as c_float * scale) as c_double
                     + 0.5f64) as c_int;
                 let mut font = Box::new(RenFont {
-                    data: data.as_mut_ptr() as *mut c_void,
+                    data: data.as_mut_ptr(),
                     stbfont,
                     sets: [ptr::null_mut(); 256],
                     size,
@@ -285,10 +259,9 @@ pub unsafe extern "C" fn ren_load_font(filename: *const c_char, size: c_float) -
                     data_len: data.len(),
                 });
                 mem::forget(data);
-                let g: *mut stbtt_bakedchar =
-                    ((*get_glyphset(&mut *font, '\n' as i32)).glyphs).as_mut_ptr();
-                (*g.offset('\t' as isize)).x1 = (*g.offset('\t' as isize)).x0;
-                (*g.offset('\n' as isize)).x1 = (*g.offset('\n' as isize)).x0;
+                let g = &mut (*get_glyphset(&mut *font, '\n' as i32)).glyphs;
+                g['\t' as usize].x1 = g['\t' as usize].x0;
+                g['\n' as usize].x1 = g['\n' as usize].x0;
                 Box::into_raw(font)
             }
         }
@@ -297,16 +270,16 @@ pub unsafe extern "C" fn ren_load_font(filename: *const c_char, size: c_float) -
 
 #[no_mangle]
 pub unsafe extern "C" fn ren_free_font(font: *mut RenFont) {
-    let mut i = 0;
-    while i < 256 {
-        let set: *mut GlyphSet = (*font).sets[i];
+    for set in (*font).sets {
         if !set.is_null() {
             ren_free_image((*set).image);
             let _ = Box::from_raw(set);
         }
-        i += 1;
     }
-    let _ = Box::from_raw(slice::from_raw_parts_mut((*font).data, (*font).data_len));
+    let _ = Box::from_raw(slice::from_raw_parts_mut(
+        (*font).data as *mut u8,
+        (*font).data_len,
+    ));
     let _ = Box::from_raw(font);
 }
 
@@ -319,15 +292,11 @@ pub unsafe extern "C" fn ren_set_font_tab_width(font: *mut RenFont, n: c_int) {
 #[no_mangle]
 pub unsafe extern "C" fn ren_get_font_width(font: *mut RenFont, text: *const c_char) -> c_int {
     let mut x = 0;
-    let mut p = text;
-    let mut codepoint = 0;
-    while *p != 0 {
-        p = utf8_to_codepoint(p, &mut codepoint);
+    let p = CStr::from_ptr(text).to_str().expect("Invalid utf-8");
+    for codepoint in p.chars() {
         let set: *mut GlyphSet = get_glyphset(font, codepoint as c_int);
-        let g = &mut *((*set).glyphs)
-            .as_mut_ptr()
-            .offset((codepoint & 0xff) as isize) as *mut stbtt_bakedchar;
-        x = (x as c_float + (*g).xadvance) as c_int;
+        let g = &(*set).glyphs[(codepoint as u32 & 0xff) as usize];
+        x = (x as c_float + g.xadvance) as c_int;
     }
     x
 }
@@ -379,32 +348,29 @@ pub unsafe extern "C" fn ren_draw_rect(rect: RenRect, color: RenColor) {
     x2 = if x2 > CLIP.right { CLIP.right } else { x2 };
     y2 = if y2 > CLIP.bottom { CLIP.bottom } else { y2 };
     let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
-    let mut d = (*surf).pixels as *mut RenColor;
-    d = d.offset((x1 + y1 * (*surf).w) as isize);
-    let dr = (*surf).w - (x2 - x1);
+    // FIXME: The original C code seems to do out of bounds access.
+    //        Using twice the length is a hack to use checked indexing.
+    let mut d = slice::from_raw_parts_mut(
+        (*surf).pixels as *mut RenColor,
+        ((*surf).w * (*surf).h) as usize * 2,
+    );
+    d = &mut d[(x1 + y1 * (*surf).w) as usize..];
+    let dr = ((*surf).w - (x2 - x1)) as usize;
     if color.a == 0xff {
-        let mut j = y1;
-        while j < y2 {
-            let mut i = x1;
-            while i < x2 {
-                *d = color;
-                d = d.offset(1);
-                i += 1;
+        for _ in y1..y2 {
+            for _ in x1..x2 {
+                d[0] = color;
+                d = &mut d[1..];
             }
-            d = d.offset(dr as isize);
-            j += 1;
+            d = &mut d[dr..];
         }
     } else {
-        let mut j_0 = y1;
-        while j_0 < y2 {
-            let mut i_0 = x1;
-            while i_0 < x2 {
-                *d = blend_pixel(*d, color);
-                d = d.offset(1);
-                i_0 += 1;
+        for _ in y1..y2 {
+            for _ in x1..x2 {
+                d[0] = blend_pixel(d[0], color);
+                d = &mut d[1..];
             }
-            d = d.offset(dr as isize);
-            j_0 += 1;
+            d = &mut d[dr..];
         }
     };
 }
@@ -444,24 +410,25 @@ pub unsafe extern "C" fn ren_draw_image(
         return;
     }
     let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
-    let mut s = (*image).pixels;
-    let mut d = (*surf).pixels as *mut RenColor;
-    s = s.offset(((*sub).x + (*sub).y * (*image).width) as isize);
-    d = d.offset((x + y * (*surf).w) as isize);
+    let mut s = slice::from_raw_parts((*image).pixels, ((*image).width * (*image).height) as usize);
+    // FIXME: The original C code seems to do out of bounds access.
+    //        Using twice the length is a hack to use checked indexing.
+    let mut d = slice::from_raw_parts_mut(
+        (*surf).pixels as *mut RenColor,
+        ((*surf).w * (*surf).h) as usize * 2,
+    );
+    s = &s[((*sub).x + (*sub).y * (*image).width) as usize..];
+    d = &mut d[(x + y * (*surf).w) as usize..];
     let sr = (*image).width - (*sub).width;
     let dr = (*surf).w - (*sub).width;
-    let mut j = 0;
-    while j < (*sub).height {
-        let mut i = 0;
-        while i < (*sub).width {
-            *d = blend_pixel2(*d, *s, color);
-            d = d.offset(1);
-            s = s.offset(1);
-            i += 1;
+    for _ in 0..(*sub).height {
+        for _ in 0..(*sub).width {
+            d[0] = blend_pixel2(d[0], s[0], color);
+            d = &mut d[1..];
+            s = &s[1..];
         }
-        d = d.offset(dr as isize);
-        s = s.offset(sr as isize);
-        j += 1;
+        d = &mut d[dr as usize..];
+        s = &s[sr as usize..];
     }
 }
 
@@ -474,14 +441,10 @@ pub unsafe extern "C" fn ren_draw_text(
     color: RenColor,
 ) -> c_int {
     let mut rect = RenRect::default();
-    let mut p = text;
-    let mut codepoint = 0;
-    while *p != 0 {
-        p = utf8_to_codepoint(p, &mut codepoint);
+    let p = CStr::from_ptr(text).to_str().unwrap();
+    for codepoint in p.chars() {
         let set: *mut GlyphSet = get_glyphset(font, codepoint as c_int);
-        let g = &mut *((*set).glyphs)
-            .as_mut_ptr()
-            .offset((codepoint & 0xff) as isize) as *mut stbtt_bakedchar;
+        let g = &mut (*set).glyphs[(codepoint as u32 & 0xff) as usize] as *mut stbtt_bakedchar;
         rect.x = (*g).x0 as c_int;
         rect.y = (*g).y0 as c_int;
         rect.width = (*g).x1 as c_int - (*g).x0 as c_int;

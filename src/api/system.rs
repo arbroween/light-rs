@@ -1,4 +1,5 @@
-use crate::{os_string_from_ptr, rencache::rencache_invalidate, window};
+use crate::{c_str, os_string_from_ptr, rencache::rencache_invalidate, window};
+use core::slice;
 use libc::system;
 use lua_sys::*;
 use sdl2_sys::*;
@@ -19,23 +20,21 @@ pub const WIN_NORMAL: c_uint = 0;
 
 unsafe extern "C" fn button_name(button: c_int) -> *const c_char {
     match button {
-        1 => b"left\0" as *const u8 as *const c_char,
-        2 => b"middle\0" as *const u8 as *const c_char,
-        3 => b"right\0" as *const u8 as *const c_char,
-        _ => b"?\0" as *const u8 as *const c_char,
+        1 => c_str!("left"),
+        2 => c_str!("middle"),
+        3 => c_str!("right"),
+        _ => c_str!("?"),
     }
 }
 
 unsafe extern "C" fn key_name(dst: *mut c_char, sym: c_int) -> *mut c_char {
-    let key = CStr::from_ptr(SDL_GetKeyName(sym));
-    key.as_ptr()
-        .copy_to_nonoverlapping(dst, key.to_bytes_with_nul().len());
-    let mut p = dst;
-    while *p != 0 {
-        *p = (*p as u8).to_ascii_lowercase() as c_char;
-        p = p.offset(1);
+    let key = CStr::from_ptr(SDL_GetKeyName(sym)).to_bytes_with_nul();
+    let dst = slice::from_raw_parts_mut(dst as *mut u8, key.len());
+    dst.copy_from_slice(key);
+    for c in dst.iter_mut() {
+        *c = c.to_ascii_lowercase();
     }
-    dst
+    dst.as_mut_ptr() as *mut c_char
 }
 
 unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
@@ -51,12 +50,12 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
         }
         match e.type_ {
             256 => {
-                lua_pushstring(state, b"quit\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("quit"));
                 return 1;
             }
             512 => {
                 if e.window.event as c_int == SDL_WindowEventID::SDL_WINDOWEVENT_RESIZED as c_int {
-                    lua_pushstring(state, b"resized\0" as *const u8 as *const c_char);
+                    lua_pushstring(state, c_str!("resized"));
                     lua_pushnumber(state, e.window.data1 as lua_Number);
                     lua_pushnumber(state, e.window.data2 as lua_Number);
                     return 3;
@@ -64,7 +63,7 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
                     == SDL_WindowEventID::SDL_WINDOWEVENT_EXPOSED as c_int
                 {
                     rencache_invalidate();
-                    lua_pushstring(state, b"exposed\0" as *const u8 as *const c_char);
+                    lua_pushstring(state, c_str!("exposed"));
                     return 1;
                 }
                 if e.window.event as c_int
@@ -76,7 +75,7 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
             4096 => {
                 SDL_GetGlobalMouseState(&mut mx, &mut my);
                 SDL_GetWindowPosition(window, &mut wx, &mut wy);
-                lua_pushstring(state, b"filedropped\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("filedropped"));
                 lua_pushstring(state, e.drop.file);
                 lua_pushnumber(state, (mx - wx) as lua_Number);
                 lua_pushnumber(state, (my - wy) as lua_Number);
@@ -84,17 +83,17 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
                 return 4;
             }
             768 => {
-                lua_pushstring(state, b"keypressed\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("keypressed"));
                 lua_pushstring(state, key_name(buf.as_mut_ptr(), e.key.keysym.sym));
                 return 2;
             }
             769 => {
-                lua_pushstring(state, b"keyreleased\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("keyreleased"));
                 lua_pushstring(state, key_name(buf.as_mut_ptr(), e.key.keysym.sym));
                 return 2;
             }
             771 => {
-                lua_pushstring(state, b"textinput\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("textinput"));
                 lua_pushstring(state, e.text.text.as_mut_ptr());
                 return 2;
             }
@@ -102,7 +101,7 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
                 if e.button.button == 1 {
                     SDL_CaptureMouse(SDL_bool::SDL_TRUE);
                 }
-                lua_pushstring(state, b"mousepressed\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("mousepressed"));
                 lua_pushstring(state, button_name(e.button.button as c_int));
                 lua_pushnumber(state, e.button.x as lua_Number);
                 lua_pushnumber(state, e.button.y as lua_Number);
@@ -113,14 +112,14 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
                 if e.button.button == 1 {
                     SDL_CaptureMouse(SDL_bool::SDL_FALSE);
                 }
-                lua_pushstring(state, b"mousereleased\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("mousereleased"));
                 lua_pushstring(state, button_name(e.button.button as c_int));
                 lua_pushnumber(state, e.button.x as lua_Number);
                 lua_pushnumber(state, e.button.y as lua_Number);
                 return 4;
             }
             1024 => {
-                lua_pushstring(state, b"mousemoved\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("mousemoved"));
                 lua_pushnumber(state, e.motion.x as lua_Number);
                 lua_pushnumber(state, e.motion.y as lua_Number);
                 lua_pushnumber(state, e.motion.xrel as lua_Number);
@@ -128,7 +127,7 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
                 return 5;
             }
             1027 => {
-                lua_pushstring(state, b"mousewheel\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("mousewheel"));
                 lua_pushnumber(state, e.wheel.y as lua_Number);
                 return 2;
             }
@@ -149,11 +148,11 @@ unsafe extern "C" fn f_wait_event(state: *mut lua_State) -> c_int {
 static mut CURSOR_CACHE: [*mut SDL_Cursor; 12] = [ptr::null_mut(); 12];
 
 static mut CURSOR_OPTS: [*const c_char; 6] = [
-    b"arrow\0" as *const u8 as *const c_char,
-    b"ibeam\0" as *const u8 as *const c_char,
-    b"sizeh\0" as *const u8 as *const c_char,
-    b"sizev\0" as *const u8 as *const c_char,
-    b"hand\0" as *const u8 as *const c_char,
+    c_str!("arrow"),
+    c_str!("ibeam"),
+    c_str!("sizeh"),
+    c_str!("sizev"),
+    c_str!("hand"),
     ptr::null(),
 ];
 
@@ -169,7 +168,7 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
     let opt = luaL_checkoption(
         state,
         1,
-        b"arrow\0" as *const u8 as *const c_char,
+        c_str!("arrow"),
         CURSOR_OPTS.as_mut_ptr() as *const *const c_char,
     );
     let n = CURSOR_ENUMS[opt as usize];
@@ -189,19 +188,14 @@ unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> c_int {
 }
 
 static mut WINDOW_OPTS: [*const c_char; 4] = [
-    b"normal\0" as *const u8 as *const c_char,
-    b"maximized\0" as *const u8 as *const c_char,
-    b"fullscreen\0" as *const u8 as *const c_char,
+    c_str!("normal"),
+    c_str!("maximized"),
+    c_str!("fullscreen"),
     ptr::null(),
 ];
 
 unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> c_int {
-    let n = luaL_checkoption(
-        state,
-        1,
-        b"normal\0" as *const u8 as *const c_char,
-        WINDOW_OPTS.as_ptr(),
-    );
+    let n = luaL_checkoption(state, 1, c_str!("normal"), WINDOW_OPTS.as_ptr());
     SDL_SetWindowFullscreen(
         window,
         if n == WIN_FULLSCREEN as c_int {
@@ -235,12 +229,12 @@ unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> c_int {
         SDL_MessageBoxButtonData {
             flags: SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT as u32,
             buttonid: 1,
-            text: b"Yes\0" as *const u8 as *const c_char,
+            text: c_str!("Yes"),
         },
         SDL_MessageBoxButtonData {
             flags: SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT as u32,
             buttonid: 0,
-            text: b"No\0" as *const u8 as *const c_char,
+            text: c_str!("No"),
         },
     ];
     let data = SDL_MessageBoxData {
@@ -262,7 +256,7 @@ unsafe extern "C" fn f_chdir(state: *mut lua_State) -> c_int {
     let path: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
     let path = os_string_from_ptr(path);
     if set_current_dir(path).is_err() {
-        luaL_error(state, b"chdir() failed\0" as *const u8 as *const c_char);
+        luaL_error(state, c_str!("chdir() failed"));
     }
     0
 }
@@ -326,17 +320,17 @@ unsafe extern "C" fn f_get_file_info(state: *mut lua_State) -> c_int {
                     .expect("Current date should not be set before 1970")
                     .as_secs_f64() as lua_Number,
             );
-            lua_setfield(state, -2, b"modified\0" as *const u8 as *const c_char);
+            lua_setfield(state, -2, c_str!("modified"));
             lua_pushnumber(state, s.len() as lua_Number);
-            lua_setfield(state, -2, b"size\0" as *const u8 as *const c_char);
+            lua_setfield(state, -2, c_str!("size"));
             if s.file_type().is_file() {
-                lua_pushstring(state, b"file\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("file"));
             } else if s.file_type().is_dir() {
-                lua_pushstring(state, b"dir\0" as *const u8 as *const c_char);
+                lua_pushstring(state, c_str!("dir"));
             } else {
                 lua_pushnil(state);
             }
-            lua_setfield(state, -2, b"type\0" as *const u8 as *const c_char);
+            lua_setfield(state, -2, c_str!("type"));
             1
         }
     }
@@ -380,104 +374,104 @@ unsafe extern "C" fn f_exec(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_fuzzy_match(state: *mut lua_State) -> c_int {
-    let mut str: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
-    let mut ptn: *const c_char = luaL_checklstring(state, 2, ptr::null_mut());
+    let str: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let ptn: *const c_char = luaL_checklstring(state, 2, ptr::null_mut());
+    let str = CStr::from_ptr(str).to_str().unwrap();
+    let ptn = CStr::from_ptr(ptn).to_str().unwrap();
     let mut score = 0;
     let mut run = 0;
-    while *str != 0 && *ptn != 0 {
-        while *str == b' ' as c_char {
-            str = str.offset(1);
-        }
-        while *ptn == b' ' as c_char {
-            ptn = ptn.offset(1);
-        }
-        if (*str as u8).to_ascii_lowercase() == (*ptn as u8).to_ascii_lowercase() {
-            score += run * 10 - (*str != *ptn) as c_int;
+
+    let str = str.trim_start();
+    let ptn = ptn.trim_start();
+
+    let mut chars = ptn.chars();
+    for s in str.chars() {
+        let p = chars.next();
+        if s.to_lowercase().collect::<Vec<_>>()
+            == p.iter().flat_map(|c| c.to_lowercase()).collect::<Vec<_>>()
+        {
+            score += run * 10 - if s != p.unwrap() { 1 } else { 0 };
             run += 1;
-            ptn = ptn.offset(1);
         } else {
             score -= 10;
             run = 0;
         }
-        str = str.offset(1);
     }
-    if *ptn != 0 {
+    if chars.next().is_some() {
         return 0;
     }
-    lua_pushnumber(
-        state,
-        (score - CStr::from_ptr(str).to_bytes().len() as c_int) as lua_Number,
-    );
+
+    lua_pushnumber(state, (score - str.len() as c_int) as lua_Number);
     1
 }
 
 static mut LIB: [luaL_Reg; 18] = [
     luaL_Reg {
-        name: b"poll_event\0" as *const u8 as *const c_char,
+        name: c_str!("poll_event"),
         func: Some(f_poll_event),
     },
     luaL_Reg {
-        name: b"wait_event\0" as *const u8 as *const c_char,
+        name: c_str!("wait_event"),
         func: Some(f_wait_event),
     },
     luaL_Reg {
-        name: b"set_cursor\0" as *const u8 as *const c_char,
+        name: c_str!("set_cursor"),
         func: Some(f_set_cursor),
     },
     luaL_Reg {
-        name: b"set_window_title\0" as *const u8 as *const c_char,
+        name: c_str!("set_window_title"),
         func: Some(f_set_window_title),
     },
     luaL_Reg {
-        name: b"set_window_mode\0" as *const u8 as *const c_char,
+        name: c_str!("set_window_mode"),
         func: Some(f_set_window_mode),
     },
     luaL_Reg {
-        name: b"window_has_focus\0" as *const u8 as *const c_char,
+        name: c_str!("window_has_focus"),
         func: Some(f_window_has_focus),
     },
     luaL_Reg {
-        name: b"show_confirm_dialog\0" as *const u8 as *const c_char,
+        name: c_str!("show_confirm_dialog"),
         func: Some(f_show_confirm_dialog),
     },
     luaL_Reg {
-        name: b"chdir\0" as *const u8 as *const c_char,
+        name: c_str!("chdir"),
         func: Some(f_chdir),
     },
     luaL_Reg {
-        name: b"list_dir\0" as *const u8 as *const c_char,
+        name: c_str!("list_dir"),
         func: Some(f_list_dir),
     },
     luaL_Reg {
-        name: b"absolute_path\0" as *const u8 as *const c_char,
+        name: c_str!("absolute_path"),
         func: Some(f_absolute_path),
     },
     luaL_Reg {
-        name: b"get_file_info\0" as *const u8 as *const c_char,
+        name: c_str!("get_file_info"),
         func: Some(f_get_file_info),
     },
     luaL_Reg {
-        name: b"get_clipboard\0" as *const u8 as *const c_char,
+        name: c_str!("get_clipboard"),
         func: Some(f_get_clipboard),
     },
     luaL_Reg {
-        name: b"set_clipboard\0" as *const u8 as *const c_char,
+        name: c_str!("set_clipboard"),
         func: Some(f_set_clipboard),
     },
     luaL_Reg {
-        name: b"get_time\0" as *const u8 as *const c_char,
+        name: c_str!("get_time"),
         func: Some(f_get_time),
     },
     luaL_Reg {
-        name: b"sleep\0" as *const u8 as *const c_char,
+        name: c_str!("sleep"),
         func: Some(f_sleep),
     },
     luaL_Reg {
-        name: b"exec\0" as *const u8 as *const c_char,
+        name: c_str!("exec"),
         func: Some(f_exec),
     },
     luaL_Reg {
-        name: b"fuzzy_match\0" as *const u8 as *const c_char,
+        name: c_str!("fuzzy_match"),
         func: Some(f_fuzzy_match),
     },
     luaL_Reg {

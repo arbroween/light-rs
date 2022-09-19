@@ -1,5 +1,6 @@
 use crate::{
     api::renderer_font::luaopen_renderer_font,
+    c_str,
     rencache::{
         rencache_begin_frame, rencache_draw_rect, rencache_draw_text, rencache_end_frame,
         rencache_set_clip_rect, rencache_show_debug,
@@ -82,8 +83,7 @@ unsafe extern "C" fn f_draw_rect(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_draw_text(state: *mut lua_State) -> c_int {
-    let font =
-        luaL_checkudata(state, 1, b"Font\0" as *const u8 as *const c_char) as *mut *mut RenFont;
+    let font = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
     let text: *const c_char = luaL_checklstring(state, 2, ptr::null_mut());
     let mut x = luaL_checknumber(state, 3) as c_int;
     let y = luaL_checknumber(state, 4) as c_int;
@@ -95,31 +95,31 @@ unsafe extern "C" fn f_draw_text(state: *mut lua_State) -> c_int {
 
 static mut LIB: [luaL_Reg; 8] = [
     luaL_Reg {
-        name: b"show_debug\0" as *const u8 as *const c_char,
+        name: c_str!("show_debug"),
         func: Some(f_show_debug),
     },
     luaL_Reg {
-        name: b"get_size\0" as *const u8 as *const c_char,
+        name: c_str!("get_size"),
         func: Some(f_get_size),
     },
     luaL_Reg {
-        name: b"begin_frame\0" as *const u8 as *const c_char,
+        name: c_str!("begin_frame"),
         func: Some(f_begin_frame),
     },
     luaL_Reg {
-        name: b"end_frame\0" as *const u8 as *const c_char,
+        name: c_str!("end_frame"),
         func: Some(f_end_frame),
     },
     luaL_Reg {
-        name: b"set_clip_rect\0" as *const u8 as *const c_char,
+        name: c_str!("set_clip_rect"),
         func: Some(f_set_clip_rect),
     },
     luaL_Reg {
-        name: b"draw_rect\0" as *const u8 as *const c_char,
+        name: c_str!("draw_rect"),
         func: Some(f_draw_rect),
     },
     luaL_Reg {
-        name: b"draw_text\0" as *const u8 as *const c_char,
+        name: c_str!("draw_text"),
         func: Some(f_draw_text),
     },
     luaL_Reg {
