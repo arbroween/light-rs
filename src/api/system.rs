@@ -74,7 +74,7 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
             }
             4096 => {
                 SDL_GetGlobalMouseState(&mut mx, &mut my);
-                SDL_GetWindowPosition(window, &mut wx, &mut wy);
+                SDL_GetWindowPosition(window.unwrap().as_ptr(), &mut wx, &mut wy);
                 lua_pushstring(state, c_str!("filedropped"));
                 lua_pushstring(state, e.drop.file);
                 lua_pushnumber(state, (mx - wx) as lua_Number);
@@ -183,7 +183,7 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
 
 unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> c_int {
     let title = luaL_checklstring(state, 1, ptr::null_mut());
-    SDL_SetWindowTitle(window, title);
+    SDL_SetWindowTitle(window.unwrap().as_ptr(), title);
     0
 }
 
@@ -197,7 +197,7 @@ static mut WINDOW_OPTS: [*const c_char; 4] = [
 unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> c_int {
     let n = luaL_checkoption(state, 1, c_str!("normal"), WINDOW_OPTS.as_ptr());
     SDL_SetWindowFullscreen(
-        window,
+        window.unwrap().as_ptr(),
         if n == WIN_FULLSCREEN as c_int {
             SDL_WindowFlags::SDL_WINDOW_FULLSCREEN_DESKTOP as u32
         } else {
@@ -205,16 +205,16 @@ unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> c_int {
         },
     );
     if n == WIN_NORMAL as c_int {
-        SDL_RestoreWindow(window);
+        SDL_RestoreWindow(window.unwrap().as_ptr());
     }
     if n == WIN_MAXIMIZED as c_int {
-        SDL_MaximizeWindow(window);
+        SDL_MaximizeWindow(window.unwrap().as_ptr());
     }
     0
 }
 
 unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> c_int {
-    let flags = SDL_GetWindowFlags(window);
+    let flags = SDL_GetWindowFlags(window.unwrap().as_ptr());
     lua_pushboolean(
         state,
         (flags & SDL_WindowFlags::SDL_WINDOW_INPUT_FOCUS as c_uint) as c_int,

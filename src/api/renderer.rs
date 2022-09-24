@@ -8,12 +8,7 @@ use crate::{
     renderer::{ren_get_size, RenColor, RenFont, RenRect},
 };
 use lua_sys::*;
-use std::{
-    ffi::CStr,
-    mem,
-    os::raw::c_int,
-    ptr,
-};
+use std::{ffi::CStr, mem, os::raw::c_int, ptr};
 
 unsafe extern "C" fn checkcolor(state: *mut lua_State, idx: c_int, def: c_int) -> RenColor {
     let mut color = RenColor::default();

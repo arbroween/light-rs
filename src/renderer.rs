@@ -1,4 +1,4 @@
-use crate::os_string_from_ptr;
+use crate::{os_string_from_ptr, window};
 use sdl2_sys::*;
 use stb_truetype_rust::*;
 use std::{
@@ -94,28 +94,30 @@ impl Clip {
     }
 }
 
-static mut WINDOW: *mut SDL_Window = ptr::null_mut();
-
 static mut CLIP: Clip = Clip::default();
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_init(win: *mut SDL_Window) {
-    assert!(!win.is_null());
-    WINDOW = win;
-    let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
+pub unsafe extern "C" fn ren_init(win: Option<ptr::NonNull<SDL_Window>>) {
+    assert!(win.is_some());
+    window = win;
+    let surf = ptr::NonNull::new(SDL_GetWindowSurface(window.unwrap().as_ptr())).unwrap();
     ren_set_clip_rect(RenRect {
         x: 0,
         y: 0,
-        width: (*surf).w,
-        height: (*surf).h,
+        width: surf.as_ref().w,
+        height: surf.as_ref().h,
     });
 }
 
 pub unsafe fn ren_update_rects(rects: &[RenRect]) {
-    SDL_UpdateWindowSurfaceRects(WINDOW, rects.as_ptr() as *const SDL_Rect, rects.len() as c_int);
+    SDL_UpdateWindowSurfaceRects(
+        window.unwrap().as_ptr(),
+        rects.as_ptr() as *const SDL_Rect,
+        rects.len() as c_int,
+    );
     static mut INITIAL_FRAME: bool = true;
     if INITIAL_FRAME {
-        SDL_ShowWindow(WINDOW);
+        SDL_ShowWindow(window.unwrap().as_ptr());
         INITIAL_FRAME = false;
     }
 }
@@ -130,9 +132,9 @@ pub unsafe extern "C" fn ren_set_clip_rect(rect: RenRect) {
 
 #[no_mangle]
 pub unsafe extern "C" fn ren_get_size(x: &mut c_int, y: &mut c_int) {
-    let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
-    *x = (*surf).w;
-    *y = (*surf).h;
+    let surf = ptr::NonNull::new(SDL_GetWindowSurface(window.unwrap().as_ptr())).unwrap();
+    *x = surf.as_ref().w;
+    *y = surf.as_ref().h;
 }
 
 #[no_mangle]
@@ -318,15 +320,15 @@ pub unsafe extern "C" fn ren_draw_rect(rect: RenRect, color: RenColor) {
     let mut y2 = rect.y + rect.height;
     x2 = if x2 > CLIP.right { CLIP.right } else { x2 };
     y2 = if y2 > CLIP.bottom { CLIP.bottom } else { y2 };
-    let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
+    let surf = ptr::NonNull::new(SDL_GetWindowSurface(window.unwrap().as_ptr())).unwrap();
     // FIXME: The original C code seems to do out of bounds access.
     //        Using twice the length is a hack to use checked indexing.
     let mut d = slice::from_raw_parts_mut(
-        (*surf).pixels as *mut RenColor,
-        ((*surf).w * (*surf).h) as usize * 2,
+        (*surf.as_ptr()).pixels as *mut RenColor,
+        (surf.as_ref().w * surf.as_ref().h) as usize * 2,
     );
-    d = &mut d[(x1 + y1 * (*surf).w) as usize..];
-    let dr = ((*surf).w - (x2 - x1)) as usize;
+    d = &mut d[(x1 + y1 * surf.as_ref().w) as usize..];
+    let dr = (surf.as_ref().w - (x2 - x1)) as usize;
     if color.a == 0xff {
         for _ in y1..y2 {
             for _ in x1..x2 {
@@ -359,41 +361,41 @@ pub unsafe extern "C" fn ren_draw_image(
     }
     let mut n = CLIP.left - x;
     if n > 0 {
-        (*sub).width -= n;
-        (*sub).x += n;
+        sub.width -= n;
+        sub.x += n;
         x += n;
     }
     n = CLIP.top - y;
     if n > 0 {
-        (*sub).height -= n;
-        (*sub).y += n;
+        sub.height -= n;
+        sub.y += n;
         y += n;
     }
-    n = x + (*sub).width - CLIP.right;
+    n = x + sub.width - CLIP.right;
     if n > 0 {
-        (*sub).width -= n;
+        sub.width -= n;
     }
-    n = y + (*sub).height - CLIP.bottom;
+    n = y + sub.height - CLIP.bottom;
     if n > 0 {
-        (*sub).height -= n;
+        sub.height -= n;
     }
-    if (*sub).width <= 0 || (*sub).height <= 0 {
+    if sub.width <= 0 || sub.height <= 0 {
         return;
     }
-    let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
-    let mut s = (*image).pixels.as_ref();
+    let surf = ptr::NonNull::new(SDL_GetWindowSurface(window.unwrap().as_ptr())).unwrap();
+    let mut s = image.pixels.as_ref();
     // FIXME: The original C code seems to do out of bounds access.
     //        Using twice the length is a hack to use checked indexing.
     let mut d = slice::from_raw_parts_mut(
-        (*surf).pixels as *mut RenColor,
-        ((*surf).w * (*surf).h) as usize * 2,
+        (*surf.as_ptr()).pixels as *mut RenColor,
+        (surf.as_ref().w * surf.as_ref().h) as usize * 2,
     );
-    s = &s[((*sub).x + (*sub).y * (*image).width) as usize..];
-    d = &mut d[(x + y * (*surf).w) as usize..];
-    let sr = (*image).width - (*sub).width;
-    let dr = (*surf).w - (*sub).width;
-    for _ in 0..(*sub).height {
-        for _ in 0..(*sub).width {
+    s = &s[(sub.x + sub.y * image.width) as usize..];
+    d = &mut d[(x + y * surf.as_ref().w) as usize..];
+    let sr = image.width - sub.width;
+    let dr = surf.as_ref().w - sub.width;
+    for _ in 0..sub.height {
+        for _ in 0..sub.width {
             d[0] = blend_pixel2(d[0], s[0], color);
             d = &mut d[1..];
             s = &s[1..];
@@ -415,18 +417,18 @@ pub unsafe fn ren_draw_text(
     for codepoint in p.chars() {
         let set = get_glyphset(font, codepoint as c_int);
         let g = &mut set.glyphs[(codepoint as u32 & 0xff) as usize];
-        rect.x = (*g).x0 as c_int;
-        rect.y = (*g).y0 as c_int;
-        rect.width = (*g).x1 as c_int - (*g).x0 as c_int;
-        rect.height = (*g).y1 as c_int - (*g).y0 as c_int;
+        rect.x = g.x0 as c_int;
+        rect.y = g.y0 as c_int;
+        rect.width = g.x1 as c_int - g.x0 as c_int;
+        rect.height = g.y1 as c_int - g.y0 as c_int;
         ren_draw_image(
-            (*set).image.as_mut(),
+            set.image.as_mut(),
             &mut rect,
-            (x as c_float + (*g).xoff) as c_int,
-            (y as c_float + (*g).yoff) as c_int,
+            (x as c_float + g.xoff) as c_int,
+            (y as c_float + g.yoff) as c_int,
             color,
         );
-        x = (x as c_float + (*g).xadvance) as c_int;
+        x = (x as c_float + g.xadvance) as c_int;
     }
     x
 }

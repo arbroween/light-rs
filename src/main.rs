@@ -6,9 +6,9 @@ use renderer::ren_init;
 use sdl2_sys::*;
 use std::{
     ffi::{CString, OsString},
-    fs, mem,
+    fs,
     os::raw::{c_char, c_double, c_int, c_long, c_uchar, c_void},
-    ptr, slice,
+    ptr,
 };
 
 pub mod api;
@@ -23,7 +23,7 @@ macro_rules! c_str {
 pub(crate) use c_str;
 
 #[no_mangle]
-pub static mut window: *mut SDL_Window = ptr::null_mut();
+pub static mut window: Option<ptr::NonNull<SDL_Window>> = Option::None;
 
 unsafe extern "C" fn get_scale() -> c_double {
     let mut dpi = 0.0;
@@ -31,14 +31,11 @@ unsafe extern "C" fn get_scale() -> c_double {
     1.0
 }
 
-unsafe extern "C" fn get_exe_filename(buf: *mut c_char, sz: c_int) {
-    let buf = slice::from_raw_parts_mut(buf as *mut u8, sz as usize);
+fn get_exe_filename() -> String {
     let path = format!("/proc/{}/exe", std::process::id());
-    if let Ok(target) = fs::read_link(path) {
-        let bytes = target.to_string_lossy();
-        let len = bytes.len().min(sz as usize - 1);
-        buf[0..len].copy_from_slice(bytes.as_ref().as_bytes());
-        buf[len] = 0;
+    match fs::read_link(path) {
+        Ok(target) => target.to_string_lossy().into_owned(),
+        Err(_) => String::new(),
     }
 }
 
@@ -1165,7 +1162,7 @@ unsafe extern "C" fn init_window_icon() {
         0xff0000,
         0xff000000,
     );
-    SDL_SetWindowIcon(window, surf);
+    SDL_SetWindowIcon(window.unwrap().as_ptr(), surf);
     SDL_FreeSurface(surf);
 }
 
@@ -1188,7 +1185,7 @@ fn main() {
             driverdata: ptr::null_mut(),
         };
         SDL_GetCurrentDisplayMode(0, &mut dm);
-        window = SDL_CreateWindow(
+        window = ptr::NonNull::new(SDL_CreateWindow(
             c_str!(""),
             0x1fff0000,
             0x1fff0000,
@@ -1197,7 +1194,7 @@ fn main() {
             SDL_WindowFlags::SDL_WINDOW_RESIZABLE as u32
                 | SDL_WindowFlags::SDL_WINDOW_ALLOW_HIGHDPI as u32
                 | SDL_WindowFlags::SDL_WINDOW_HIDDEN as u32,
-        );
+        ));
         init_window_icon();
         ren_init(window);
         let state = luaL_newstate();
@@ -1216,12 +1213,8 @@ fn main() {
         lua_setglobal(state, c_str!("PLATFORM"));
         lua_pushnumber(state, get_scale());
         lua_setglobal(state, c_str!("SCALE"));
-        let mut exename: [c_char; 2048] = [0; 2048];
-        get_exe_filename(
-            exename.as_mut_ptr(),
-            mem::size_of::<[c_char; 2048]>() as c_int,
-        );
-        lua_pushstring(state, exename.as_mut_ptr());
+        let exename = CString::new(get_exe_filename()).unwrap();
+        lua_pushstring(state, exename.as_ptr());
         lua_setglobal(state, c_str!("EXEFILE"));
         let _ = luaL_loadstring(
             state,
@@ -1253,6 +1246,6 @@ fn main() {
         ) != 0
             || lua_pcallk(state, 0, -1, 0, 0, Option::None) != 0;
         lua_close(state);
-        SDL_DestroyWindow(window);
+        SDL_DestroyWindow(window.unwrap().as_ptr());
     }
 }

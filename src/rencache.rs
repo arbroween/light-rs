@@ -65,9 +65,11 @@ static mut CELLS_BUF1: [c_uint; CELLS_BUF_SIZE] = [0; CELLS_BUF_SIZE];
 
 static mut CELLS_BUF2: [c_uint; CELLS_BUF_SIZE] = [0; CELLS_BUF_SIZE];
 
-static mut CELLS_PREV: *mut c_uint = unsafe { CELLS_BUF1.as_ptr() as *mut _ };
+static mut CELLS_PREV: ptr::NonNull<c_uint> =
+    unsafe { ptr::NonNull::new_unchecked(CELLS_BUF1.as_ptr() as *mut _) };
 
-static mut CELLS: *mut c_uint = unsafe { CELLS_BUF2.as_ptr() as *mut _ };
+static mut CELLS: ptr::NonNull<c_uint> =
+    unsafe { ptr::NonNull::new_unchecked(CELLS_BUF2.as_ptr() as *mut _) };
 
 static mut RECT_BUF: [RenRect; 2000] = [RenRect::default(); 2000];
 
@@ -222,10 +224,7 @@ pub unsafe fn rencache_draw_text(
 
 #[no_mangle]
 pub unsafe extern "C" fn rencache_invalidate() {
-    CELLS_PREV.write_bytes(
-        0xff,
-        CELLS_BUF_SIZE,
-    );
+    CELLS_PREV.as_ptr().write_bytes(0xff, CELLS_BUF_SIZE);
 }
 
 #[no_mangle]
@@ -250,7 +249,7 @@ unsafe fn update_overlapping_cells(r: RenRect, h: FNV1aHasher32) {
             let idx = cell_idx(x, y);
             // FIXME: We want to do the opposite of what `Hash` is made for.
             //        We want the previous `Hasher` to be the `Hash` and write onto `CELLS`.
-            hash(CELLS.offset(idx as isize), &h);
+            hash(CELLS.as_ptr().offset(idx as isize), &h);
         }
     }
 }
@@ -290,7 +289,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
     for y in 0..max_y {
         for x in 0..max_x {
             let idx = cell_idx(x, y);
-            if *CELLS.offset(idx as isize) != *CELLS_PREV.offset(idx as isize) {
+            if *CELLS.as_ptr().offset(idx as isize) != *CELLS_PREV.as_ptr().offset(idx as isize) {
                 push_rect(
                     RenRect {
                         x,
@@ -301,7 +300,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
                     &mut rect_count,
                 );
             }
-            *CELLS_PREV.offset(idx as isize) = 2166136261;
+            *CELLS_PREV.as_ptr().offset(idx as isize) = 2166136261;
         }
     }
     for r_0 in &mut RECT_BUF[0..rect_count as usize] {
