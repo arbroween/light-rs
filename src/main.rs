@@ -5,7 +5,7 @@ use lua_sys::*;
 use renderer::ren_init;
 use sdl2_sys::*;
 use std::{
-    ffi::OsString,
+    ffi::{CString, OsString},
     fs, mem,
     os::raw::{c_char, c_double, c_int, c_long, c_uchar, c_void},
     ptr, slice,
@@ -1154,7 +1154,7 @@ unsafe extern "C" fn init_window_icon() {
         0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xe4,
         0x2e, 0x2e, 0x32, 0x6e,
     ];
-    let surf: *mut SDL_Surface = SDL_CreateRGBSurfaceFrom(
+    let surf = SDL_CreateRGBSurfaceFrom(
         ICON_RGBA.as_mut_ptr() as *mut c_void,
         64,
         64,
@@ -1200,11 +1200,12 @@ fn main() {
         );
         init_window_icon();
         ren_init(window);
-        let state: *mut lua_State = luaL_newstate();
+        let state = luaL_newstate();
         luaL_openlibs(state);
         api_load_libs(state);
         lua_createtable(state, 0, 0);
         for (i, arg) in std::env::args().enumerate() {
+            let arg = CString::new(arg).unwrap();
             lua_pushstring(state, arg.as_ptr() as *const c_char);
             lua_rawseti(state, -2, i as c_long + 1);
         }
@@ -1223,17 +1224,34 @@ fn main() {
         lua_pushstring(state, exename.as_mut_ptr());
         lua_setglobal(state, c_str!("EXEFILE"));
         let _ = luaL_loadstring(
-        state,
-        c_str!("local core\nxpcall(function()\n  SCALE = tonumber(os.getenv(\"LITE_SCALE\")) or SCALE\n  PATHSEP = package.config:sub(1, 1)\n  EXEDIR = EXEFILE:match(\"^(.+)[/\\\\].*$\")\n  package.path = EXEDIR .. '/data/?.lua;' .. package.path\n  package.path = EXEDIR .. '/data/?/init.lua;' .. package.path\n  core = require('core')\n  core.init()\n  core.run()\nend, function(err)\n  print('Error: ' .. tostring(err))\n  print(debug.traceback(nil, 2))\n  if core and core.on_error then\n    pcall(core.on_error, err)\n  end\n  os.exit(1)\nend)"),
-    ) != 0
-        || lua_pcallk(
             state,
-            0,
-            -1,
-            0,
-            0,
-            Option::None,
-        ) != 0;
+            c_str!(
+                r#"
+            local core
+            xpcall(
+                function()
+                    SCALE = tonumber(os.getenv("LITE_SCALE")) or SCALE
+                    PATHSEP = package.config:sub(1, 1)
+                    EXEDIR = EXEFILE:match("^(.+)[/\\\\].*$")
+                    package.path = EXEDIR .. "/data/?.lua;" .. package.path
+                    package.path = EXEDIR .. "/data/?/init.lua;" .. package.path
+                    core = require("core")
+                    core.init()
+                    core.run()
+                end,
+                function(err)
+                    print("Error: " .. tostring(err))
+                    print(debug.traceback(nil, 2))
+                    if core and core.on_error then
+                        pcall(core.on_error, err)
+                    end
+                    os.exit(1)
+                end
+            )
+        "#
+            ),
+        ) != 0
+            || lua_pcallk(state, 0, -1, 0, 0, Option::None) != 0;
         lua_close(state);
         SDL_DestroyWindow(window);
     }

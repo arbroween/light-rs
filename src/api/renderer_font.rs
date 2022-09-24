@@ -7,17 +7,21 @@ use crate::{
 };
 use lua_sys::*;
 use std::{
+    ffi::CStr,
     mem,
-    os::raw::{c_char, c_float, c_int},
+    os::raw::{c_float, c_int},
     ptr,
 };
 
 unsafe extern "C" fn f_load(state: *mut lua_State) -> c_int {
-    let filename: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let filename = luaL_checklstring(state, 1, ptr::null_mut());
     let size = luaL_checknumber(state, 2) as c_float;
     let self_0 = lua_newuserdata(state, mem::size_of::<*mut RenFont>()) as *mut *mut RenFont;
     luaL_setmetatable(state, c_str!("Font"));
-    *self_0 = ren_load_font(filename, size);
+    *self_0 = match ren_load_font(filename, size) {
+        Some(font) => Box::into_raw(font),
+        None => ptr::null_mut(),
+    };
     if (*self_0).is_null() {
         luaL_error(state, c_str!("failed to load font"));
     }
@@ -27,28 +31,30 @@ unsafe extern "C" fn f_load(state: *mut lua_State) -> c_int {
 unsafe extern "C" fn f_set_tab_width(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
     let n = luaL_checknumber(state, 2) as c_int;
-    ren_set_font_tab_width(*self_0, n);
+    ren_set_font_tab_width(&mut **self_0, n);
     0
 }
 
 unsafe extern "C" fn f_gc(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
     if !(*self_0).is_null() {
-        rencache_free_font(*self_0);
+        let font = Box::from_raw(*self_0);
+        rencache_free_font(font);
     }
     0
 }
 
 unsafe extern "C" fn f_get_width(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
-    let text: *const c_char = luaL_checklstring(state, 2, ptr::null_mut());
-    lua_pushnumber(state, ren_get_font_width(*self_0, text) as lua_Number);
+    let text = luaL_checklstring(state, 2, ptr::null_mut());
+    let text = CStr::from_ptr(text).to_str().unwrap();
+    lua_pushnumber(state, ren_get_font_width(&mut **self_0, text) as lua_Number);
     1
 }
 
 unsafe extern "C" fn f_get_height(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
-    lua_pushnumber(state, ren_get_font_height(*self_0) as lua_Number);
+    lua_pushnumber(state, ren_get_font_height(&**self_0) as lua_Number);
     1
 }
 

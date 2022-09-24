@@ -1,24 +1,27 @@
 use crate::renderer::{
-    ren_draw_rect, ren_draw_text, ren_free_font, ren_get_font_height, ren_get_font_width,
-    ren_get_size, ren_set_clip_rect, ren_update_rects, RenColor, RenFont, RenRect,
+    ren_draw_rect, ren_draw_text, ren_get_font_height, ren_get_font_width, ren_get_size,
+    ren_set_clip_rect, ren_update_rects, RenColor, RenFont, RenRect,
 };
+use hashers::fnv::FNV1aHasher32;
 use libc::rand;
+use once_cell::sync::Lazy;
 use std::{
-    ffi::{CStr, CString},
-    hash::Hash,
+    convert::TryInto,
+    hash::{Hash, Hasher},
+    iter::{self, FromIterator},
     mem,
-    os::raw::{c_char, c_int, c_uint},
+    os::raw::{c_int, c_uint},
     ptr, slice,
 };
 
-#[derive(Copy, Clone, Hash)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct Command {
     pub type_: CommandType,
     pub rect: RenRect,
     pub color: RenColor,
-    pub font: *mut RenFont,
-    pub text: *mut c_char,
+    pub font: Option<Box<RenFont>>,
+    pub text: Option<String>,
 }
 
 impl Command {
@@ -27,13 +30,27 @@ impl Command {
             type_: CommandType::FreeFont,
             rect: RenRect::default(),
             color: RenColor::default(),
-            font: ptr::null_mut(),
-            text: ptr::null_mut(),
+            font: None,
+            text: None,
         }
     }
 }
 
-#[derive(Clone, Copy, Hash)]
+impl Hash for Command {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.type_.hash(state);
+        self.rect.hash(state);
+        self.color.hash(state);
+        (self
+            .font
+            .as_deref()
+            .map_or(ptr::null(), |font| font as *const _) as usize)
+            .hash(state);
+        self.text.hash(state);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Hash)]
 #[repr(u32)]
 pub enum CommandType {
     FreeFont = 0,
@@ -42,9 +59,11 @@ pub enum CommandType {
     DrawRect = 3,
 }
 
-static mut CELLS_BUF1: [c_uint; 4000] = [0; 4000];
+const CELLS_BUF_SIZE: usize = 4000;
 
-static mut CELLS_BUF2: [c_uint; 4000] = [0; 4000];
+static mut CELLS_BUF1: [c_uint; CELLS_BUF_SIZE] = [0; CELLS_BUF_SIZE];
+
+static mut CELLS_BUF2: [c_uint; CELLS_BUF_SIZE] = [0; CELLS_BUF_SIZE];
 
 static mut CELLS_PREV: *mut c_uint = unsafe { CELLS_BUF1.as_ptr() as *mut _ };
 
@@ -52,9 +71,7 @@ static mut CELLS: *mut c_uint = unsafe { CELLS_BUF2.as_ptr() as *mut _ };
 
 static mut RECT_BUF: [RenRect; 2000] = [RenRect::default(); 2000];
 
-static mut COMMAND_BUF: [Command; 16384] = [Command::default(); 16384];
-
-static mut COMMAND_BUF_IDX: usize = 0;
+static mut COMMAND_BUF: Lazy<CommandBuffer> = Lazy::new(CommandBuffer::new);
 
 static mut SCREEN_RECT: RenRect = RenRect::default();
 
@@ -105,32 +122,44 @@ unsafe extern "C" fn merge_rects(a: RenRect, b: RenRect) -> RenRect {
     }
 }
 
-unsafe extern "C" fn push_command(type_: CommandType) -> *mut Command {
-    let mut cmd: *mut Command = (&mut COMMAND_BUF[COMMAND_BUF_IDX]) as *mut Command;
-    let n = COMMAND_BUF_IDX + 1;
-    if n > COMMAND_BUF.len() {
-        eprintln!("Warning: (src/rencache.rs): exhausted command buffer");
-        return ptr::null_mut();
-    }
-    COMMAND_BUF_IDX = n;
-    *cmd = Command::default();
-    (*cmd).type_ = type_;
-    cmd
+struct CommandBuffer {
+    buffer: Box<[Command; 16384]>,
+    index: usize,
 }
 
-unsafe extern "C" fn next_command(prev: *mut *mut Command) -> bool {
-    if (*prev).is_null() {
-        *prev = COMMAND_BUF.as_mut_ptr();
-    } else {
-        *prev = (*prev).add(1);
+impl CommandBuffer {
+    fn new() -> Self {
+        Self {
+            buffer: Vec::from_iter(iter::repeat_with(Command::default).take(16384))
+                .into_boxed_slice()
+                .try_into()
+                .unwrap(),
+            index: 0,
+        }
     }
-    *prev != (&mut COMMAND_BUF[COMMAND_BUF_IDX]) as *mut Command
-}
 
-unsafe extern "C" fn free_command(cmd: *mut Command) {
-    if !(*cmd).text.is_null() {
-        let _ = CString::from_raw((*cmd).text);
-        (*cmd).text = ptr::null_mut();
+    unsafe extern "C" fn push_command(&mut self, type_: CommandType) -> Option<&mut Command> {
+        match self.buffer.get_mut(self.index) {
+            None => {
+                eprintln!("Warning: (src/rencache.rs): exhausted command buffer");
+                None
+            }
+            Some(cmd) => {
+                self.index += 1;
+                *cmd = Command::default();
+                (*cmd).type_ = type_;
+                Some(cmd)
+            }
+        }
+    }
+
+    unsafe extern "C" fn next_command(&mut self, prev: *mut *mut Command) -> bool {
+        if (*prev).is_null() {
+            *prev = self.buffer.as_mut_ptr();
+        } else {
+            *prev = (*prev).add(1);
+        }
+        *prev != (&mut self.buffer[self.index]) as *mut Command
     }
 }
 
@@ -139,20 +168,18 @@ pub unsafe extern "C" fn rencache_show_debug(enable: bool) {
     SHOW_DEBUG = enable;
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rencache_free_font(font: *mut RenFont) {
-    let cmd: *mut Command = push_command(CommandType::FreeFont);
-    if !cmd.is_null() {
-        let fresh2 = &mut (*cmd).font;
-        *fresh2 = font;
+pub unsafe fn rencache_free_font(font: Box<RenFont>) {
+    let cmd = COMMAND_BUF.push_command(CommandType::FreeFont);
+    if let Some(cmd) = cmd {
+        cmd.font = Some(font);
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rencache_set_clip_rect(rect: RenRect) {
-    let mut cmd: *mut Command = push_command(CommandType::SetClip);
-    if !cmd.is_null() {
-        (*cmd).rect = intersect_rects(rect, SCREEN_RECT);
+    let cmd = COMMAND_BUF.push_command(CommandType::SetClip);
+    if let Some(cmd) = cmd {
+        cmd.rect = intersect_rects(rect, SCREEN_RECT);
     }
 }
 
@@ -161,17 +188,16 @@ pub unsafe extern "C" fn rencache_draw_rect(rect: RenRect, color: RenColor) {
     if !rects_overlap(SCREEN_RECT, rect) {
         return;
     }
-    let mut cmd: *mut Command = push_command(CommandType::DrawRect);
-    if !cmd.is_null() {
-        (*cmd).rect = rect;
-        (*cmd).color = color;
+    let cmd = COMMAND_BUF.push_command(CommandType::DrawRect);
+    if let Some(cmd) = cmd {
+        cmd.rect = rect;
+        cmd.color = color;
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rencache_draw_text(
-    font: *mut RenFont,
-    text: *const c_char,
+pub unsafe fn rencache_draw_text(
+    font: &mut RenFont,
+    text: &str,
     x: c_int,
     y: c_int,
     color: RenColor,
@@ -183,12 +209,11 @@ pub unsafe extern "C" fn rencache_draw_text(
         height: ren_get_font_height(font),
     };
     if rects_overlap(SCREEN_RECT, rect) {
-        let mut cmd: *mut Command = push_command(CommandType::DrawText);
-        if !cmd.is_null() {
-            (*cmd).text = CString::into_raw(CStr::from_ptr(text).to_owned());
-            (*cmd).color = color;
-            let fresh3 = &mut (*cmd).font;
-            *fresh3 = font;
+        let cmd = COMMAND_BUF.push_command(CommandType::DrawText);
+        if let Some(cmd) = cmd {
+            cmd.text = Some(text.to_owned());
+            cmd.color = color;
+            cmd.font = Some(Box::new(font.clone()));
             (*cmd).rect = rect;
         }
     }
@@ -197,7 +222,10 @@ pub unsafe extern "C" fn rencache_draw_text(
 
 #[no_mangle]
 pub unsafe extern "C" fn rencache_invalidate() {
-    CELLS_PREV.write_bytes(0xff, mem::size_of::<[c_uint; 4000]>());
+    CELLS_PREV.write_bytes(
+        0xff,
+        CELLS_BUF_SIZE,
+    );
 }
 
 #[no_mangle]
@@ -212,28 +240,22 @@ pub unsafe extern "C" fn rencache_begin_frame() {
     }
 }
 
-unsafe extern "C" fn update_overlapping_cells(r: RenRect, h: c_uint) {
+unsafe fn update_overlapping_cells(r: RenRect, h: FNV1aHasher32) {
     let x1 = r.x / 96;
     let y1 = r.y / 96;
     let x2 = (r.x + r.width) / 96;
     let y2 = (r.y + r.height) / 96;
-    let mut y = y1;
-    while y <= y2 {
-        let mut x = x1;
-        while x <= x2 {
+    for y in y1..=y2 {
+        for x in x1..=x2 {
             let idx = cell_idx(x, y);
-            hash(
-                &mut *CELLS.offset(idx as isize),
-                &h as *const c_uint as *const c_void,
-                mem::size_of::<c_uint>() as c_int,
-            );
-            x += 1;
+            // FIXME: We want to do the opposite of what `Hash` is made for.
+            //        We want the previous `Hasher` to be the `Hash` and write onto `CELLS`.
+            hash(CELLS.offset(idx as isize), &h);
         }
-        y += 1;
     }
 }
 
-unsafe extern "C" fn push_rect(r: RenRect, count: *mut c_int) {
+unsafe extern "C" fn push_rect(r: RenRect, count: &mut usize) {
     for rp in RECT_BUF[0..*count as usize].iter_mut().rev() {
         if rects_overlap(*rp, r) {
             *rp = merge_rects(*rp, r);
@@ -249,7 +271,8 @@ unsafe extern "C" fn push_rect(r: RenRect, count: *mut c_int) {
 pub unsafe extern "C" fn rencache_end_frame() {
     let mut cmd: *mut Command = ptr::null_mut();
     let mut cr: RenRect = SCREEN_RECT;
-    while next_command(&mut cmd) {
+    while COMMAND_BUF.next_command(&mut cmd) {
+        assert!(!cmd.is_null());
         if let CommandType::SetClip = (*cmd).type_ {
             cr = (*cmd).rect;
         }
@@ -257,8 +280,8 @@ pub unsafe extern "C" fn rencache_end_frame() {
         if r.width == 0 || r.height == 0 {
             continue;
         }
-        let mut h = 2166136261;
-        hash(&mut h, cmd as *const c_void, (*cmd).size);
+        let mut h = FNV1aHasher32::default();
+        (*cmd).hash(&mut h);
         update_overlapping_cells(r, h);
     }
     let mut rect_count = 0;
@@ -293,7 +316,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
         let r_1: RenRect = RECT_BUF[i_0 as usize];
         ren_set_clip_rect(r_1);
         cmd = ptr::null_mut();
-        while next_command(&mut cmd) {
+        while COMMAND_BUF.next_command(&mut cmd) {
             match (*cmd).type_ {
                 CommandType::FreeFont => {
                     has_free_commands = true;
@@ -306,8 +329,8 @@ pub unsafe extern "C" fn rencache_end_frame() {
                 }
                 CommandType::DrawText => {
                     ren_draw_text(
-                        (*cmd).font,
-                        (*cmd).text,
+                        (*cmd).font.as_deref_mut().unwrap(),
+                        (*cmd).text.as_deref().unwrap(),
                         (*cmd).rect.x,
                         (*cmd).rect.y,
                         (*cmd).color,
@@ -326,17 +349,17 @@ pub unsafe extern "C" fn rencache_end_frame() {
         }
     }
     if rect_count > 0 {
-        ren_update_rects(RECT_BUF.as_mut_ptr(), rect_count);
+        ren_update_rects(&RECT_BUF[..rect_count]);
     }
     if has_free_commands {
         cmd = ptr::null_mut();
-        while next_command(&mut cmd) {
+        while COMMAND_BUF.next_command(&mut cmd) {
             if let CommandType::FreeFont = (*cmd).type_ {
-                ren_free_font((*cmd).font);
+                drop((*cmd).font.take());
             }
-            free_command(cmd);
+            let _ = (*cmd).text.take();
         }
     }
     mem::swap(&mut CELLS, &mut CELLS_PREV);
-    COMMAND_BUF_IDX = 0;
+    COMMAND_BUF.index = 0;
 }

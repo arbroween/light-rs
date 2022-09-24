@@ -172,7 +172,7 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
         CURSOR_OPTS.as_mut_ptr() as *const *const c_char,
     );
     let n = CURSOR_ENUMS[opt as usize];
-    let mut cursor: *mut SDL_Cursor = CURSOR_CACHE[n as usize];
+    let mut cursor = CURSOR_CACHE[n as usize];
     if cursor.is_null() {
         cursor = SDL_CreateSystemCursor(n);
         CURSOR_CACHE[n as usize] = cursor;
@@ -182,7 +182,7 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> c_int {
-    let title: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let title = luaL_checklstring(state, 1, ptr::null_mut());
     SDL_SetWindowTitle(window, title);
     0
 }
@@ -223,8 +223,8 @@ unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> c_int {
-    let title: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
-    let msg: *const c_char = luaL_checklstring(state, 2, ptr::null_mut());
+    let title = luaL_checklstring(state, 1, ptr::null_mut());
+    let message = luaL_checklstring(state, 2, ptr::null_mut());
     let mut buttons = [
         SDL_MessageBoxButtonData {
             flags: SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT as u32,
@@ -241,7 +241,7 @@ unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> c_int {
         flags: 0,
         window: ptr::null_mut(),
         title,
-        message: msg,
+        message,
         numbuttons: 2 as c_int,
         buttons: buttons.as_mut_ptr(),
         colorScheme: ptr::null(),
@@ -253,7 +253,7 @@ unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_chdir(state: *mut lua_State) -> c_int {
-    let path: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let path = luaL_checklstring(state, 1, ptr::null_mut());
     let path = os_string_from_ptr(path);
     if set_current_dir(path).is_err() {
         luaL_error(state, c_str!("chdir() failed"));
@@ -262,7 +262,7 @@ unsafe extern "C" fn f_chdir(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_list_dir(state: *mut lua_State) -> c_int {
-    let path: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let path = luaL_checklstring(state, 1, ptr::null_mut());
     let path = os_string_from_ptr(path);
     let dir = match fs::read_dir(path) {
         Ok(dir) => dir,
@@ -288,7 +288,7 @@ unsafe extern "C" fn f_list_dir(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_absolute_path(state: *mut lua_State) -> c_int {
-    let path: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let path = luaL_checklstring(state, 1, ptr::null_mut());
     let path = os_string_from_ptr(path);
     match fs::canonicalize(path) {
         Err(_) => 0,
@@ -301,7 +301,7 @@ unsafe extern "C" fn f_absolute_path(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_get_file_info(state: *mut lua_State) -> c_int {
-    let path: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let path = luaL_checklstring(state, 1, ptr::null_mut());
     let path = os_string_from_ptr(path);
     match fs::metadata(path) {
         Err(error) => {
@@ -337,7 +337,7 @@ unsafe extern "C" fn f_get_file_info(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_get_clipboard(state: *mut lua_State) -> c_int {
-    let text: *mut c_char = SDL_GetClipboardText();
+    let text = SDL_GetClipboardText();
     if text.is_null() {
         return 0;
     }
@@ -347,7 +347,7 @@ unsafe extern "C" fn f_get_clipboard(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_set_clipboard(state: *mut lua_State) -> c_int {
-    let text: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
+    let text = luaL_checklstring(state, 1, ptr::null_mut());
     SDL_SetClipboardText(text);
     0
 }
@@ -366,7 +366,7 @@ unsafe extern "C" fn f_sleep(state: *mut lua_State) -> c_int {
 
 unsafe extern "C" fn f_exec(state: *mut lua_State) -> c_int {
     let mut len = 0;
-    let cmd: *const c_char = luaL_checklstring(state, 1, &mut len);
+    let cmd = luaL_checklstring(state, 1, &mut len);
     let cmd = CStr::from_ptr(cmd).to_str().unwrap();
     let buf = format!("{} &\0", cmd);
     let _ = system(buf.as_ptr() as *const c_char);
@@ -374,9 +374,9 @@ unsafe extern "C" fn f_exec(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_fuzzy_match(state: *mut lua_State) -> c_int {
-    let str: *const c_char = luaL_checklstring(state, 1, ptr::null_mut());
-    let ptn: *const c_char = luaL_checklstring(state, 2, ptr::null_mut());
+    let str = luaL_checklstring(state, 1, ptr::null_mut());
     let str = CStr::from_ptr(str).to_str().unwrap();
+    let ptn = luaL_checklstring(state, 2, ptr::null_mut());
     let ptn = CStr::from_ptr(ptn).to_str().unwrap();
     let mut score = 0;
     let mut run = 0;

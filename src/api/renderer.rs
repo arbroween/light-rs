@@ -9,8 +9,9 @@ use crate::{
 };
 use lua_sys::*;
 use std::{
+    ffi::CStr,
     mem,
-    os::raw::{c_char, c_int},
+    os::raw::c_int,
     ptr,
 };
 
@@ -84,11 +85,14 @@ unsafe extern "C" fn f_draw_rect(state: *mut lua_State) -> c_int {
 
 unsafe extern "C" fn f_draw_text(state: *mut lua_State) -> c_int {
     let font = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
-    let text: *const c_char = luaL_checklstring(state, 2, ptr::null_mut());
+    let text = luaL_checklstring(state, 2, ptr::null_mut());
+    let text = CStr::from_ptr(text).to_str().unwrap();
     let mut x = luaL_checknumber(state, 3) as c_int;
     let y = luaL_checknumber(state, 4) as c_int;
     let color = checkcolor(state, 5, 255);
-    x = rencache_draw_text(*font, text, x, y, color);
+    if !(*font).is_null() {
+        x = rencache_draw_text(&mut **font, text, x, y, color);
+    }
     lua_pushnumber(state, x as lua_Number);
     1
 }
@@ -139,6 +143,6 @@ pub unsafe extern "C" fn luaopen_renderer(state: *mut lua_State) -> c_int {
     );
     luaL_setfuncs(state, LIB.as_ptr(), 0);
     luaopen_renderer_font(state);
-    lua_setfield(state, -2, b"font\0" as *const u8 as *const c_char);
+    lua_setfield(state, -2, c_str!("font"));
     1
 }

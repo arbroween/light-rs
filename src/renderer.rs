@@ -2,22 +2,22 @@ use crate::os_string_from_ptr;
 use sdl2_sys::*;
 use stb_truetype_rust::*;
 use std::{
-    ffi::CStr,
     fs,
-    mem::{self, MaybeUninit},
-    os::raw::{c_char, c_double, c_float, c_int, c_uchar},
+    hash::Hash,
+    mem::MaybeUninit,
+    os::raw::{c_char, c_double, c_float, c_int},
     ptr, slice,
 };
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Debug, Hash)]
 #[repr(C)]
 pub struct RenImage {
-    pub pixels: *mut RenColor,
+    pub pixels: Box<[RenColor]>,
     pub width: c_int,
     pub height: c_int,
 }
 
-#[derive(Copy, Clone, Hash)]
+#[derive(Copy, Clone, Debug, Hash)]
 #[repr(C)]
 pub struct RenColor {
     pub b: u8,
@@ -37,21 +37,20 @@ impl RenColor {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct RenFont {
-    pub data: *mut u8,
+    pub data: Box<[u8]>,
     pub stbfont: stbtt_fontinfo,
-    pub sets: [*mut GlyphSet; 256],
-    pub size: c_float,
+    pub sets: [Option<Box<GlyphSet>>; 256],
+    pub size: f32,
     pub height: c_int,
-    data_len: usize,
 }
 
-#[derive(Copy, Clone)]
+#[derive(Clone, Debug)]
 #[repr(C)]
 pub struct GlyphSet {
-    pub image: *mut RenImage,
+    pub image: Box<RenImage>,
     pub glyphs: [stbtt_bakedchar; 256],
 }
 
@@ -112,9 +111,8 @@ pub unsafe extern "C" fn ren_init(win: *mut SDL_Window) {
     });
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn ren_update_rects(rects: *mut RenRect, count: c_int) {
-    SDL_UpdateWindowSurfaceRects(WINDOW, rects as *mut SDL_Rect, count);
+pub unsafe fn ren_update_rects(rects: &[RenRect]) {
+    SDL_UpdateWindowSurfaceRects(WINDOW, rects.as_ptr() as *const SDL_Rect, rects.len() as c_int);
     static mut INITIAL_FRAME: bool = true;
     if INITIAL_FRAME {
         SDL_ShowWindow(WINDOW);
@@ -131,35 +129,24 @@ pub unsafe extern "C" fn ren_set_clip_rect(rect: RenRect) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_get_size(x: *mut c_int, y: *mut c_int) {
+pub unsafe extern "C" fn ren_get_size(x: &mut c_int, y: &mut c_int) {
     let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
     *x = (*surf).w;
     *y = (*surf).h;
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_new_image(width: c_int, height: c_int) -> *mut RenImage {
+pub unsafe extern "C" fn ren_new_image(width: c_int, height: c_int) -> Box<RenImage> {
     assert!(width > 0 && height > 0);
-    let mut pixels = vec![RenColor::default(); (width * height) as usize].into_boxed_slice();
-    let image = Box::new(RenImage {
-        pixels: pixels.as_mut_ptr(),
+    let pixels = vec![RenColor::default(); (width * height) as usize].into_boxed_slice();
+    Box::new(RenImage {
+        pixels,
         width,
         height,
-    });
-    mem::forget(pixels);
-    Box::into_raw(image)
+    })
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn ren_free_image(image: *mut RenImage) {
-    let _ = Box::from_raw(slice::from_raw_parts_mut(
-        (*image).pixels,
-        ((*image).width * (*image).height) as usize,
-    ));
-    let _ = Box::from_raw(image);
-}
-
-unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: c_int) -> *mut GlyphSet {
+unsafe extern "C" fn load_glyphset(font: &mut RenFont, idx: c_int) -> Box<GlyphSet> {
     let mut width = 128;
     let mut height = 128;
     let mut glyphs = [stbtt_bakedchar {
@@ -171,15 +158,15 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: c_int) -> *mut Glyph
         yoff: 0.0,
         xadvance: 0.0,
     }; 256];
-    let image = loop {
-        let image = ren_new_image(width, height);
+    let mut image = loop {
+        let mut image = ren_new_image(width, height);
         let s = stbtt_ScaleForMappingEmToPixels(&mut (*font).stbfont, 1.0)
             / stbtt_ScaleForPixelHeight(&mut (*font).stbfont, 1.0);
         let res = stbtt_BakeFontBitmap(
-            (*font).data as *const u8,
+            (*font).data.as_ptr(),
             0,
             (*font).size * s,
-            (*image).pixels as *mut c_uchar,
+            (*image).pixels.as_mut_ptr() as *mut u8,
             width,
             height,
             idx * 256,
@@ -191,7 +178,7 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: c_int) -> *mut Glyph
         }
         width *= 2;
         height *= 2;
-        ren_free_image(image);
+        drop(image);
     };
     let mut ascent = 0;
     let mut descent = 0;
@@ -209,38 +196,40 @@ unsafe extern "C" fn load_glyphset(font: *mut RenFont, idx: c_int) -> *mut Glyph
         glyph.xadvance = glyph.xadvance.floor();
     }
     for i in (0..width * height).rev() {
-        let n: u8 = *((*image).pixels as *mut u8).offset(i as isize);
-        *((*image).pixels).offset(i as isize) = RenColor {
+        let n: u8 = *((*image).pixels.as_mut_ptr() as *mut u8).offset(i as isize);
+        *((*image).pixels).as_mut_ptr().offset(i as isize) = RenColor {
             b: 255,
             g: 255,
             r: 255,
             a: n,
         };
     }
-    let set = Box::new(GlyphSet { image, glyphs });
-    Box::into_raw(set)
+    Box::new(GlyphSet { image, glyphs })
 }
 
-unsafe extern "C" fn get_glyphset(font: *mut RenFont, codepoint: c_int) -> *mut GlyphSet {
+unsafe extern "C" fn get_glyphset(font: &mut RenFont, codepoint: c_int) -> &mut GlyphSet {
     let idx = (codepoint >> 8) % 256;
-    if ((*font).sets[idx as usize]).is_null() {
-        let fresh3 = &mut (*font).sets[idx as usize];
-        *fresh3 = load_glyphset(font, idx);
+    if (font.sets[idx as usize]).is_none() {
+        let glyphset = load_glyphset(font, idx);
+        font.sets[idx as usize] = Some(glyphset);
     }
-    (*font).sets[idx as usize]
+    font.sets[idx as usize].as_deref_mut().unwrap()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_load_font(filename: *const c_char, size: c_float) -> *mut RenFont {
+pub unsafe extern "C" fn ren_load_font(
+    filename: *const c_char,
+    size: c_float,
+) -> Option<Box<RenFont>> {
     let filename = os_string_from_ptr(filename);
     match fs::read(filename) {
-        Err(_) => ptr::null_mut(),
+        Err(_) => Option::None,
         Ok(data) => {
-            let mut data = data.into_boxed_slice();
+            let data = data.into_boxed_slice();
             let mut stbfont: MaybeUninit<stbtt_fontinfo> = MaybeUninit::uninit();
             let ok = stbtt_InitFont(stbfont.as_mut_ptr(), data.as_ptr(), 0);
             if ok == 0 {
-                ptr::null_mut()
+                Option::None
             } else {
                 let mut stbfont = stbfont.assume_init();
                 let mut ascent = 0;
@@ -251,50 +240,32 @@ pub unsafe extern "C" fn ren_load_font(filename: *const c_char, size: c_float) -
                 let height = (((ascent - descent + linegap) as c_float * scale) as c_double
                     + 0.5f64) as c_int;
                 let mut font = Box::new(RenFont {
-                    data: data.as_mut_ptr(),
+                    data,
                     stbfont,
-                    sets: [ptr::null_mut(); 256],
+                    sets: [(); 256].map(|_| Option::None),
                     size,
                     height,
-                    data_len: data.len(),
                 });
-                mem::forget(data);
-                let g = &mut (*get_glyphset(&mut *font, '\n' as i32)).glyphs;
+                let g = &mut get_glyphset(&mut *font, '\n' as i32).glyphs;
                 g['\t' as usize].x1 = g['\t' as usize].x0;
                 g['\n' as usize].x1 = g['\n' as usize].x0;
-                Box::into_raw(font)
+                Some(font)
             }
         }
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_free_font(font: *mut RenFont) {
-    for set in (*font).sets {
-        if !set.is_null() {
-            ren_free_image((*set).image);
-            let _ = Box::from_raw(set);
-        }
-    }
-    let _ = Box::from_raw(slice::from_raw_parts_mut(
-        (*font).data as *mut u8,
-        (*font).data_len,
-    ));
-    let _ = Box::from_raw(font);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ren_set_font_tab_width(font: *mut RenFont, n: c_int) {
-    let mut set: *mut GlyphSet = get_glyphset(font, '\t' as i32);
+pub unsafe extern "C" fn ren_set_font_tab_width(font: &mut RenFont, n: c_int) {
+    let mut set = get_glyphset(font, '\t' as i32);
     (*set).glyphs['\t' as usize].xadvance = n as c_float;
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn ren_get_font_width(font: *mut RenFont, text: *const c_char) -> c_int {
+pub unsafe fn ren_get_font_width(font: &mut RenFont, text: &str) -> c_int {
     let mut x = 0;
-    let p = CStr::from_ptr(text).to_str().expect("Invalid utf-8");
+    let p = text;
     for codepoint in p.chars() {
-        let set: *mut GlyphSet = get_glyphset(font, codepoint as c_int);
+        let set = get_glyphset(font, codepoint as c_int);
         let g = &(*set).glyphs[(codepoint as u32 & 0xff) as usize];
         x = (x as c_float + g.xadvance) as c_int;
     }
@@ -302,8 +273,8 @@ pub unsafe extern "C" fn ren_get_font_width(font: *mut RenFont, text: *const c_c
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_get_font_height(font: *mut RenFont) -> c_int {
-    (*font).height
+pub unsafe extern "C" fn ren_get_font_height(font: &RenFont) -> c_int {
+    font.height
 }
 
 #[inline]
@@ -377,8 +348,8 @@ pub unsafe extern "C" fn ren_draw_rect(rect: RenRect, color: RenColor) {
 
 #[no_mangle]
 pub unsafe extern "C" fn ren_draw_image(
-    image: *mut RenImage,
-    mut sub: *mut RenRect,
+    image: &RenImage,
+    mut sub: &mut RenRect,
     mut x: c_int,
     mut y: c_int,
     color: RenColor,
@@ -410,7 +381,7 @@ pub unsafe extern "C" fn ren_draw_image(
         return;
     }
     let surf: *mut SDL_Surface = SDL_GetWindowSurface(WINDOW);
-    let mut s = slice::from_raw_parts((*image).pixels, ((*image).width * (*image).height) as usize);
+    let mut s = (*image).pixels.as_ref();
     // FIXME: The original C code seems to do out of bounds access.
     //        Using twice the length is a hack to use checked indexing.
     let mut d = slice::from_raw_parts_mut(
@@ -432,25 +403,24 @@ pub unsafe extern "C" fn ren_draw_image(
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn ren_draw_text(
-    font: *mut RenFont,
-    text: *const c_char,
+pub unsafe fn ren_draw_text(
+    font: &mut RenFont,
+    text: &str,
     mut x: c_int,
     y: c_int,
     color: RenColor,
 ) -> c_int {
     let mut rect = RenRect::default();
-    let p = CStr::from_ptr(text).to_str().unwrap();
+    let p = text;
     for codepoint in p.chars() {
-        let set: *mut GlyphSet = get_glyphset(font, codepoint as c_int);
-        let g = &mut (*set).glyphs[(codepoint as u32 & 0xff) as usize] as *mut stbtt_bakedchar;
+        let set = get_glyphset(font, codepoint as c_int);
+        let g = &mut set.glyphs[(codepoint as u32 & 0xff) as usize];
         rect.x = (*g).x0 as c_int;
         rect.y = (*g).y0 as c_int;
         rect.width = (*g).x1 as c_int - (*g).x0 as c_int;
         rect.height = (*g).y1 as c_int - (*g).y0 as c_int;
         ren_draw_image(
-            (*set).image,
+            (*set).image.as_mut(),
             &mut rect,
             (x as c_float + (*g).xoff) as c_int,
             (y as c_float + (*g).yoff) as c_int,
