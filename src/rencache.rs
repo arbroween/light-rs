@@ -1,6 +1,6 @@
 use crate::renderer::{
-    ren_draw_rect, ren_draw_text, ren_get_font_height, ren_get_font_width, ren_get_size,
-    ren_set_clip_rect, ren_update_rects, RenColor, RenFont, RenRect,
+    ren_draw_rect, ren_draw_text, ren_get_size, ren_set_clip_rect, ren_update_rects, RenColor,
+    RenFont, RenRect,
 };
 use hashers::fnv::FNV1aHasher32;
 use libc::rand;
@@ -91,39 +91,6 @@ unsafe extern "C" fn cell_idx(x: c_int, y: c_int) -> c_int {
     x + y * 80
 }
 
-#[inline]
-unsafe extern "C" fn rects_overlap(a: RenRect, b: RenRect) -> bool {
-    b.x + b.width >= a.x && b.x <= a.x + a.width && b.y + b.height >= a.y && b.y <= a.y + a.height
-}
-
-unsafe extern "C" fn intersect_rects(a: RenRect, b: RenRect) -> RenRect {
-    let x1 = a.x.max(b.x);
-    let y1 = a.y.max(b.y);
-    let x2 = (a.x + a.width).min(b.x + b.width);
-    let y2 = (a.y + a.height).min(b.y + b.height);
-    {
-        RenRect {
-            x: x1,
-            y: y1,
-            width: 0.max(x2 - x1),
-            height: 0.max(y2 - y1),
-        }
-    }
-}
-
-unsafe extern "C" fn merge_rects(a: RenRect, b: RenRect) -> RenRect {
-    let x1 = a.x.min(b.x);
-    let y1 = a.y.min(b.y);
-    let x2 = (a.x + a.width).max(b.x + b.width);
-    let y2 = (a.y + a.height).max(b.y + b.height);
-    RenRect {
-        x: x1,
-        y: y1,
-        width: x2 - x1,
-        height: y2 - y1,
-    }
-}
-
 struct CommandBuffer {
     buffer: Box<[Command; 16384]>,
     index: usize,
@@ -181,13 +148,13 @@ pub unsafe fn rencache_free_font(font: Box<RenFont>) {
 pub unsafe extern "C" fn rencache_set_clip_rect(rect: RenRect) {
     let cmd = COMMAND_BUF.push_command(CommandType::SetClip);
     if let Some(cmd) = cmd {
-        cmd.rect = intersect_rects(rect, SCREEN_RECT);
+        cmd.rect = rect.intersection(SCREEN_RECT);
     }
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rencache_draw_rect(rect: RenRect, color: RenColor) {
-    if !rects_overlap(SCREEN_RECT, rect) {
+    if !SCREEN_RECT.has_overlap(rect) {
         return;
     }
     let cmd = COMMAND_BUF.push_command(CommandType::DrawRect);
@@ -207,10 +174,10 @@ pub unsafe fn rencache_draw_text(
     let rect = RenRect {
         x,
         y,
-        width: ren_get_font_width(font, text),
-        height: ren_get_font_height(font),
+        width: font.measure_width(text),
+        height: font.height(),
     };
-    if rects_overlap(SCREEN_RECT, rect) {
+    if SCREEN_RECT.has_overlap(rect) {
         let cmd = COMMAND_BUF.push_command(CommandType::DrawText);
         if let Some(cmd) = cmd {
             cmd.text = Some(text.to_owned());
@@ -256,8 +223,8 @@ unsafe fn update_overlapping_cells(r: RenRect, h: FNV1aHasher32) {
 
 unsafe extern "C" fn push_rect(r: RenRect, count: &mut usize) {
     for rp in RECT_BUF[0..*count as usize].iter_mut().rev() {
-        if rects_overlap(*rp, r) {
-            *rp = merge_rects(*rp, r);
+        if rp.has_overlap(r) {
+            *rp = rp.union(r);
             return;
         }
     }
@@ -275,7 +242,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
         if let CommandType::SetClip = (*cmd).type_ {
             cr = (*cmd).rect;
         }
-        let r = intersect_rects((*cmd).rect, cr);
+        let r = (*cmd).rect.intersection(cr);
         if r.width == 0 || r.height == 0 {
             continue;
         }
@@ -308,7 +275,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
         r_0.y *= 96;
         r_0.width *= 96;
         r_0.height *= 96;
-        *r_0 = intersect_rects(*r_0, SCREEN_RECT);
+        *r_0 = r_0.intersection(SCREEN_RECT);
     }
     let mut has_free_commands = false;
     for i_0 in 0..rect_count {
@@ -321,7 +288,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
                     has_free_commands = true;
                 }
                 CommandType::SetClip => {
-                    ren_set_clip_rect(intersect_rects((*cmd).rect, r_1));
+                    ren_set_clip_rect((*cmd).rect.intersection(r_1));
                 }
                 CommandType::DrawRect => {
                     ren_draw_rect((*cmd).rect, (*cmd).color);

@@ -1,11 +1,12 @@
-use crate::{os_string_from_ptr, window};
+use crate::window;
 use sdl2_sys::*;
 use stb_truetype_rust::*;
 use std::{
     fs,
     hash::Hash,
     mem::MaybeUninit,
-    os::raw::{c_char, c_double, c_float, c_int},
+    os::raw::{c_double, c_float, c_int},
+    path::Path,
     ptr, slice,
 };
 
@@ -15,6 +16,18 @@ pub struct RenImage {
     pub pixels: Box<[RenColor]>,
     pub width: c_int,
     pub height: c_int,
+}
+
+impl RenImage {
+    pub(super) fn new(width: c_int, height: c_int) -> Box<Self> {
+        assert!(width > 0 && height > 0);
+        let pixels = vec![RenColor::default(); (width * height) as usize].into_boxed_slice();
+        Box::new(Self {
+            pixels,
+            width,
+            height,
+        })
+    }
 }
 
 #[derive(Copy, Clone, Debug, Hash)]
@@ -35,6 +48,26 @@ impl RenColor {
             a: 0,
         }
     }
+
+    fn blend_pixel(mut self, src: Self) -> Self {
+        let ia = 0xff - src.a as c_int;
+        self.r = ((src.r as c_int * src.a as c_int + self.r as c_int * ia) >> 8) as u8;
+        self.g = ((src.g as c_int * src.a as c_int + self.g as c_int * ia) >> 8) as u8;
+        self.b = ((src.b as c_int * src.a as c_int + self.b as c_int * ia) >> 8) as u8;
+        self
+    }
+
+    fn blend_pixel2(mut self, mut src: Self, color: Self) -> Self {
+        src.a = ((src.a as c_int * color.a as c_int) >> 8) as u8;
+        let ia = 0xff - src.a as c_int;
+        self.r = (((src.r as c_int * color.r as c_int * src.a as c_int) >> 16)
+            + ((self.r as c_int * ia) >> 8)) as u8;
+        self.g = (((src.g as c_int * color.g as c_int * src.a as c_int) >> 16)
+            + ((self.g as c_int * ia) >> 8)) as u8;
+        self.b = (((src.b as c_int * color.b as c_int * src.a as c_int) >> 16)
+            + ((self.b as c_int * ia) >> 8)) as u8;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +78,136 @@ pub struct RenFont {
     pub sets: [Option<Box<GlyphSet>>; 256],
     pub size: f32,
     pub height: c_int,
+}
+
+impl RenFont {
+    pub(super) fn load<P: AsRef<Path>>(filename: P, size: c_float) -> Option<Box<Self>> {
+        unsafe {
+            match fs::read(filename) {
+                Err(_) => Option::None,
+                Ok(data) => {
+                    let data = data.into_boxed_slice();
+                    let mut stbfont: MaybeUninit<stbtt_fontinfo> = MaybeUninit::uninit();
+                    let ok = stbtt_InitFont(stbfont.as_mut_ptr(), data.as_ptr(), 0);
+                    if ok == 0 {
+                        Option::None
+                    } else {
+                        let mut stbfont = stbfont.assume_init();
+                        let mut ascent = 0;
+                        let mut descent = 0;
+                        let mut linegap = 0;
+                        stbtt_GetFontVMetrics(
+                            &mut stbfont,
+                            &mut ascent,
+                            &mut descent,
+                            &mut linegap,
+                        );
+                        let scale = stbtt_ScaleForMappingEmToPixels(&mut stbfont, size);
+                        let height = (((ascent - descent + linegap) as c_float * scale) as c_double
+                            + 0.5f64) as c_int;
+                        let mut font = Box::new(Self {
+                            data,
+                            stbfont,
+                            sets: [(); 256].map(|_| Option::None),
+                            size,
+                            height,
+                        });
+                        let g = &mut font.get_glyphset_mut('\n' as i32).glyphs;
+                        g['\t' as usize].x1 = g['\t' as usize].x0;
+                        g['\n' as usize].x1 = g['\n' as usize].x0;
+                        Some(font)
+                    }
+                }
+            }
+        }
+    }
+
+    fn load_glyphset(&mut self, idx: c_int) -> Box<GlyphSet> {
+        unsafe {
+            let mut width = 128;
+            let mut height = 128;
+            let mut glyphs = [stbtt_bakedchar {
+                x0: 0,
+                y0: 0,
+                x1: 0,
+                y1: 0,
+                xoff: 0.0,
+                yoff: 0.0,
+                xadvance: 0.0,
+            }; 256];
+            let mut image = loop {
+                let mut image = RenImage::new(width, height);
+                let s = stbtt_ScaleForMappingEmToPixels(&mut self.stbfont, 1.0)
+                    / stbtt_ScaleForPixelHeight(&mut self.stbfont, 1.0);
+                let res = stbtt_BakeFontBitmap(
+                    self.data.as_ptr(),
+                    0,
+                    self.size * s,
+                    image.pixels.as_mut_ptr() as *mut u8,
+                    width,
+                    height,
+                    idx * 256,
+                    256,
+                    glyphs.as_mut_ptr(),
+                );
+                if res >= 0 {
+                    break image;
+                }
+                width *= 2;
+                height *= 2;
+                drop(image);
+            };
+            let mut ascent = 0;
+            let mut descent = 0;
+            let mut linegap = 0;
+            stbtt_GetFontVMetrics(&mut self.stbfont, &mut ascent, &mut descent, &mut linegap);
+            let scale = stbtt_ScaleForMappingEmToPixels(&mut self.stbfont, self.size);
+            let scaled_ascent = ((ascent as c_float * scale) as c_double + 0.5f64) as c_int;
+            for glyph in &mut glyphs {
+                glyph.yoff += scaled_ascent as c_float;
+                glyph.xadvance = glyph.xadvance.floor();
+            }
+            for i in (0..width * height).rev() {
+                let n: u8 = *((*image).pixels.as_mut_ptr() as *mut u8).offset(i as isize);
+                *((*image).pixels).as_mut_ptr().offset(i as isize) = RenColor {
+                    b: 255,
+                    g: 255,
+                    r: 255,
+                    a: n,
+                };
+            }
+            Box::new(GlyphSet { image, glyphs })
+        }
+    }
+
+    fn get_glyphset_mut(&mut self, codepoint: c_int) -> &mut GlyphSet {
+        let idx = (codepoint >> 8) % 256;
+        if (self.sets[idx as usize]).is_none() {
+            let glyphset = self.load_glyphset(idx);
+            self.sets[idx as usize] = Some(glyphset);
+        }
+        self.sets[idx as usize].as_deref_mut().unwrap()
+    }
+
+    pub(super) fn set_tab_width(&mut self, n: c_int) {
+        let mut set = self.get_glyphset_mut('\t' as i32);
+        set.glyphs['\t' as usize].xadvance = n as c_float;
+    }
+
+    pub(super) fn measure_width(&mut self, text: &str) -> c_int {
+        let mut x = 0;
+        let p = text;
+        for codepoint in p.chars() {
+            let set = self.get_glyphset_mut(codepoint as c_int);
+            let g = &set.glyphs[(codepoint as u32 & 0xff) as usize];
+            x = (x as c_float + g.xadvance) as c_int;
+        }
+        x
+    }
+
+    pub(super) fn height(&self) -> c_int {
+        self.height
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +233,39 @@ impl RenRect {
             y: 0,
             width: 0,
             height: 0,
+        }
+    }
+
+    pub(super) fn has_overlap(self, rhs: Self) -> bool {
+        rhs.x + rhs.width >= self.x
+            && rhs.x <= self.x + self.width
+            && rhs.y + rhs.height >= self.y
+            && rhs.y <= self.y + self.height
+    }
+
+    pub(super) fn intersection(self, rhs: Self) -> Self {
+        let x1 = self.x.max(rhs.x);
+        let y1 = self.y.max(rhs.y);
+        let x2 = (self.x + self.width).min(rhs.x + rhs.width);
+        let y2 = (self.y + self.height).min(rhs.y + rhs.height);
+        Self {
+            x: x1,
+            y: y1,
+            width: 0.max(x2 - x1),
+            height: 0.max(y2 - y1),
+        }
+    }
+
+    pub(super) fn union(self, rhs: Self) -> Self {
+        let x1 = self.x.min(rhs.x);
+        let y1 = self.y.min(rhs.y);
+        let x2 = (self.x + self.width).max(rhs.x + rhs.width);
+        let y2 = (self.y + self.height).max(rhs.y + rhs.height);
+        Self {
+            x: x1,
+            y: y1,
+            width: x2 - x1,
+            height: y2 - y1,
         }
     }
 }
@@ -138,174 +334,6 @@ pub unsafe extern "C" fn ren_get_size(x: &mut c_int, y: &mut c_int) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn ren_new_image(width: c_int, height: c_int) -> Box<RenImage> {
-    assert!(width > 0 && height > 0);
-    let pixels = vec![RenColor::default(); (width * height) as usize].into_boxed_slice();
-    Box::new(RenImage {
-        pixels,
-        width,
-        height,
-    })
-}
-
-unsafe extern "C" fn load_glyphset(font: &mut RenFont, idx: c_int) -> Box<GlyphSet> {
-    let mut width = 128;
-    let mut height = 128;
-    let mut glyphs = [stbtt_bakedchar {
-        x0: 0,
-        y0: 0,
-        x1: 0,
-        y1: 0,
-        xoff: 0.0,
-        yoff: 0.0,
-        xadvance: 0.0,
-    }; 256];
-    let mut image = loop {
-        let mut image = ren_new_image(width, height);
-        let s = stbtt_ScaleForMappingEmToPixels(&mut (*font).stbfont, 1.0)
-            / stbtt_ScaleForPixelHeight(&mut (*font).stbfont, 1.0);
-        let res = stbtt_BakeFontBitmap(
-            (*font).data.as_ptr(),
-            0,
-            (*font).size * s,
-            (*image).pixels.as_mut_ptr() as *mut u8,
-            width,
-            height,
-            idx * 256,
-            256,
-            glyphs.as_mut_ptr(),
-        );
-        if res >= 0 {
-            break image;
-        }
-        width *= 2;
-        height *= 2;
-        drop(image);
-    };
-    let mut ascent = 0;
-    let mut descent = 0;
-    let mut linegap = 0;
-    stbtt_GetFontVMetrics(
-        &mut (*font).stbfont,
-        &mut ascent,
-        &mut descent,
-        &mut linegap,
-    );
-    let scale = stbtt_ScaleForMappingEmToPixels(&mut (*font).stbfont, (*font).size);
-    let scaled_ascent = ((ascent as c_float * scale) as c_double + 0.5f64) as c_int;
-    for glyph in &mut glyphs {
-        glyph.yoff += scaled_ascent as c_float;
-        glyph.xadvance = glyph.xadvance.floor();
-    }
-    for i in (0..width * height).rev() {
-        let n: u8 = *((*image).pixels.as_mut_ptr() as *mut u8).offset(i as isize);
-        *((*image).pixels).as_mut_ptr().offset(i as isize) = RenColor {
-            b: 255,
-            g: 255,
-            r: 255,
-            a: n,
-        };
-    }
-    Box::new(GlyphSet { image, glyphs })
-}
-
-unsafe extern "C" fn get_glyphset(font: &mut RenFont, codepoint: c_int) -> &mut GlyphSet {
-    let idx = (codepoint >> 8) % 256;
-    if (font.sets[idx as usize]).is_none() {
-        let glyphset = load_glyphset(font, idx);
-        font.sets[idx as usize] = Some(glyphset);
-    }
-    font.sets[idx as usize].as_deref_mut().unwrap()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ren_load_font(
-    filename: *const c_char,
-    size: c_float,
-) -> Option<Box<RenFont>> {
-    let filename = os_string_from_ptr(filename);
-    match fs::read(filename) {
-        Err(_) => Option::None,
-        Ok(data) => {
-            let data = data.into_boxed_slice();
-            let mut stbfont: MaybeUninit<stbtt_fontinfo> = MaybeUninit::uninit();
-            let ok = stbtt_InitFont(stbfont.as_mut_ptr(), data.as_ptr(), 0);
-            if ok == 0 {
-                Option::None
-            } else {
-                let mut stbfont = stbfont.assume_init();
-                let mut ascent = 0;
-                let mut descent = 0;
-                let mut linegap = 0;
-                stbtt_GetFontVMetrics(&mut stbfont, &mut ascent, &mut descent, &mut linegap);
-                let scale = stbtt_ScaleForMappingEmToPixels(&mut stbfont, size);
-                let height = (((ascent - descent + linegap) as c_float * scale) as c_double
-                    + 0.5f64) as c_int;
-                let mut font = Box::new(RenFont {
-                    data,
-                    stbfont,
-                    sets: [(); 256].map(|_| Option::None),
-                    size,
-                    height,
-                });
-                let g = &mut get_glyphset(&mut *font, '\n' as i32).glyphs;
-                g['\t' as usize].x1 = g['\t' as usize].x0;
-                g['\n' as usize].x1 = g['\n' as usize].x0;
-                Some(font)
-            }
-        }
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ren_set_font_tab_width(font: &mut RenFont, n: c_int) {
-    let mut set = get_glyphset(font, '\t' as i32);
-    (*set).glyphs['\t' as usize].xadvance = n as c_float;
-}
-
-pub unsafe fn ren_get_font_width(font: &mut RenFont, text: &str) -> c_int {
-    let mut x = 0;
-    let p = text;
-    for codepoint in p.chars() {
-        let set = get_glyphset(font, codepoint as c_int);
-        let g = &(*set).glyphs[(codepoint as u32 & 0xff) as usize];
-        x = (x as c_float + g.xadvance) as c_int;
-    }
-    x
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn ren_get_font_height(font: &RenFont) -> c_int {
-    font.height
-}
-
-#[inline]
-unsafe extern "C" fn blend_pixel(mut dst: RenColor, src: RenColor) -> RenColor {
-    let ia = 0xff - src.a as c_int;
-    dst.r = ((src.r as c_int * src.a as c_int + dst.r as c_int * ia) >> 8) as u8;
-    dst.g = ((src.g as c_int * src.a as c_int + dst.g as c_int * ia) >> 8) as u8;
-    dst.b = ((src.b as c_int * src.a as c_int + dst.b as c_int * ia) >> 8) as u8;
-    dst
-}
-
-#[inline]
-unsafe extern "C" fn blend_pixel2(
-    mut dst: RenColor,
-    mut src: RenColor,
-    color: RenColor,
-) -> RenColor {
-    src.a = ((src.a as c_int * color.a as c_int) >> 8) as u8;
-    let ia = 0xff - src.a as c_int;
-    dst.r = (((src.r as c_int * color.r as c_int * src.a as c_int) >> 16)
-        + ((dst.r as c_int * ia) >> 8)) as u8;
-    dst.g = (((src.g as c_int * color.g as c_int * src.a as c_int) >> 16)
-        + ((dst.g as c_int * ia) >> 8)) as u8;
-    dst.b = (((src.b as c_int * color.b as c_int * src.a as c_int) >> 16)
-        + ((dst.b as c_int * ia) >> 8)) as u8;
-    dst
-}
-
-#[no_mangle]
 pub unsafe extern "C" fn ren_draw_rect(rect: RenRect, color: RenColor) {
     if color.a == 0 {
         return;
@@ -340,7 +368,7 @@ pub unsafe extern "C" fn ren_draw_rect(rect: RenRect, color: RenColor) {
     } else {
         for _ in y1..y2 {
             for _ in x1..x2 {
-                d[0] = blend_pixel(d[0], color);
+                d[0] = d[0].blend_pixel(color);
                 d = &mut d[1..];
             }
             d = &mut d[dr..];
@@ -396,7 +424,7 @@ pub unsafe extern "C" fn ren_draw_image(
     let dr = surf.as_ref().w - sub.width;
     for _ in 0..sub.height {
         for _ in 0..sub.width {
-            d[0] = blend_pixel2(d[0], s[0], color);
+            d[0] = d[0].blend_pixel2(s[0], color);
             d = &mut d[1..];
             s = &s[1..];
         }
@@ -415,7 +443,7 @@ pub unsafe fn ren_draw_text(
     let mut rect = RenRect::default();
     let p = text;
     for codepoint in p.chars() {
-        let set = get_glyphset(font, codepoint as c_int);
+        let set = font.get_glyphset_mut(codepoint as c_int);
         let g = &mut set.glyphs[(codepoint as u32 & 0xff) as usize];
         rect.x = g.x0 as c_int;
         rect.y = g.y0 as c_int;

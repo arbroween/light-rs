@@ -1,10 +1,4 @@
-use crate::{
-    c_str,
-    rencache::rencache_free_font,
-    renderer::{
-        ren_get_font_height, ren_get_font_width, ren_load_font, ren_set_font_tab_width, RenFont,
-    },
-};
+use crate::{c_str, os_string_from_ptr, rencache::rencache_free_font, renderer::RenFont};
 use lua_sys::*;
 use std::{
     ffi::CStr,
@@ -15,10 +9,11 @@ use std::{
 
 unsafe extern "C" fn f_load(state: *mut lua_State) -> c_int {
     let filename = luaL_checklstring(state, 1, ptr::null_mut());
+    let filename = os_string_from_ptr(filename);
     let size = luaL_checknumber(state, 2) as c_float;
     let self_0 = lua_newuserdata(state, mem::size_of::<*mut RenFont>()) as *mut *mut RenFont;
     luaL_setmetatable(state, c_str!("Font"));
-    *self_0 = match ren_load_font(filename, size) {
+    *self_0 = match RenFont::load(filename, size) {
         Some(font) => Box::into_raw(font),
         None => ptr::null_mut(),
     };
@@ -31,7 +26,7 @@ unsafe extern "C" fn f_load(state: *mut lua_State) -> c_int {
 unsafe extern "C" fn f_set_tab_width(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
     let n = luaL_checknumber(state, 2) as c_int;
-    ren_set_font_tab_width(&mut **self_0, n);
+    (**self_0).set_tab_width(n);
     0
 }
 
@@ -48,13 +43,13 @@ unsafe extern "C" fn f_get_width(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
     let text = luaL_checklstring(state, 2, ptr::null_mut());
     let text = CStr::from_ptr(text).to_str().unwrap();
-    lua_pushnumber(state, ren_get_font_width(&mut **self_0, text) as lua_Number);
+    lua_pushnumber(state, (**self_0).measure_width(text) as lua_Number);
     1
 }
 
 unsafe extern "C" fn f_get_height(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
-    lua_pushnumber(state, ren_get_font_height(&**self_0) as lua_Number);
+    lua_pushnumber(state, (**self_0).height() as lua_Number);
     1
 }
 
