@@ -80,8 +80,7 @@ static mut LIB: [luaL_Reg; 6] = [
     },
 ];
 
-#[no_mangle]
-pub unsafe extern "C" fn luaopen_renderer_font(state: *mut lua_State) -> c_int {
+pub(super) unsafe fn luaopen_renderer_font(state: *mut lua_State) -> c_int {
     luaL_newmetatable(state, c_str!("Font"));
     luaL_setfuncs(state, LIB.as_ptr(), 0);
     lua_pushvalue(state, -1);

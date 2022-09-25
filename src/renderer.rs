@@ -11,10 +11,10 @@ use std::{
 
 #[derive(Clone, Debug, Hash)]
 #[repr(C)]
-pub struct RenImage {
-    pub pixels: Box<[RenColor]>,
-    pub width: c_int,
-    pub height: c_int,
+pub(super) struct RenImage {
+    pixels: Box<[RenColor]>,
+    width: c_int,
+    height: c_int,
 }
 
 impl RenImage {
@@ -31,11 +31,11 @@ impl RenImage {
 
 #[derive(Copy, Clone, Debug, Hash)]
 #[repr(C)]
-pub struct RenColor {
-    pub b: u8,
-    pub g: u8,
-    pub r: u8,
-    pub a: u8,
+pub(super) struct RenColor {
+    pub(super) b: u8,
+    pub(super) g: u8,
+    pub(super) r: u8,
+    pub(super) a: u8,
 }
 
 impl RenColor {
@@ -71,12 +71,12 @@ impl RenColor {
 
 #[derive(Clone, Debug)]
 #[repr(C)]
-pub struct RenFont {
-    pub data: Box<[u8]>,
-    pub stbfont: stbtt_fontinfo,
-    pub sets: [Option<Box<GlyphSet>>; 256],
-    pub size: f32,
-    pub height: c_int,
+pub(super) struct RenFont {
+    data: Box<[u8]>,
+    stbfont: stbtt_fontinfo,
+    sets: [Option<Box<GlyphSet>>; 256],
+    size: f32,
+    height: c_int,
 }
 
 impl RenFont {
@@ -211,18 +211,18 @@ impl RenFont {
 
 #[derive(Clone, Debug)]
 #[repr(C)]
-pub struct GlyphSet {
-    pub image: Box<RenImage>,
-    pub glyphs: [stbtt_bakedchar; 256],
+struct GlyphSet {
+    image: Box<RenImage>,
+    glyphs: [stbtt_bakedchar; 256],
 }
 
 #[derive(Copy, Clone, Debug, Hash)]
 #[repr(C)]
-pub struct RenRect {
-    pub x: c_int,
-    pub y: c_int,
-    pub width: c_int,
-    pub height: c_int,
+pub(super) struct RenRect {
+    pub(super) x: c_int,
+    pub(super) y: c_int,
+    pub(super) width: c_int,
+    pub(super) height: c_int,
 }
 
 impl RenRect {
@@ -271,11 +271,11 @@ impl RenRect {
 
 #[derive(Copy, Clone)]
 #[repr(C)]
-pub struct Clip {
-    pub left: c_int,
-    pub top: c_int,
-    pub right: c_int,
-    pub bottom: c_int,
+struct Clip {
+    left: c_int,
+    top: c_int,
+    right: c_int,
+    bottom: c_int,
 }
 
 pub(super) struct Renderer {

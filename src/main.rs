@@ -10,21 +10,21 @@ use std::{
     ptr,
 };
 
-pub mod api;
-pub mod rencache;
-pub mod renderer;
-pub mod window;
+pub(self) mod api;
+pub(self) mod rencache;
+pub(self) mod renderer;
+pub(self) mod window;
 
 macro_rules! c_str {
     ($lit:expr) => {
         concat!($lit, "\0").as_ptr() as *const ::std::os::raw::c_char
     };
 }
-pub(crate) use c_str;
+pub(self) use c_str;
 
-pub static mut WINDOW: Option<ptr::NonNull<SDL_Window>> = Option::None;
+pub(self) static mut WINDOW: Option<ptr::NonNull<SDL_Window>> = Option::None;
 
-unsafe extern "C" fn get_scale() -> c_double {
+unsafe fn get_scale() -> c_double {
     let mut dpi = 0.0;
     SDL_GetDisplayDPI(0, ptr::null_mut(), &mut dpi, ptr::null_mut());
     1.0
@@ -39,13 +39,13 @@ fn get_exe_filename() -> String {
 }
 
 #[cfg(windows)]
-unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
+pub(self) unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
     use std::os::windows::ffi::OsStringExt;
     OsString::from_wide(filename)
 }
 
 #[cfg(unix)]
-unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
+pub(self) unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
     use std::{
         ffi::{CStr, OsStr},
         os::unix::ffi::OsStrExt,
@@ -54,7 +54,7 @@ unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
     OsStr::from_bytes(CStr::from_ptr(filename).to_bytes()).to_owned()
 }
 
-unsafe extern "C" fn init_window_icon() {
+unsafe fn init_window_icon() {
     static mut ICON_RGBA: [c_uchar; 16384] = [
         0x2e, 0x2e, 0x32, 0x6d, 0x2e, 0x2e, 0x32, 0xe4, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32,
         0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e,

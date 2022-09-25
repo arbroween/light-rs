@@ -5,11 +5,11 @@ use std::{
     ptr,
 };
 
-pub const WIN_FULLSCREEN: c_uint = 2;
+const WIN_FULLSCREEN: c_uint = 2;
 
-pub const WIN_MAXIMIZED: c_uint = 1;
+const WIN_MAXIMIZED: c_uint = 1;
 
-pub const WIN_NORMAL: c_uint = 0;
+const WIN_NORMAL: c_uint = 0;
 
 pub(super) enum Event {
     Quit,

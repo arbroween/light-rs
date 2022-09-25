@@ -440,8 +440,7 @@ static mut LIB: [luaL_Reg; 19] = [
     },
 ];
 
-#[no_mangle]
-pub unsafe extern "C" fn luaopen_system(state: *mut lua_State) -> c_int {
+pub(super) unsafe extern "C" fn luaopen_system(state: *mut lua_State) -> c_int {
     lua_createtable(
         state,
         0,

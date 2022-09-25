@@ -19,8 +19,7 @@ static mut LIBS: [luaL_Reg; 2] = [
     },
 ];
 
-#[no_mangle]
-pub unsafe extern "C" fn api_load_libs(state: *mut lua_State) {
+pub(super) unsafe extern "C" fn api_load_libs(state: *mut lua_State) {
     for lib in &LIBS {
         luaL_requiref(state, lib.name, lib.func, 1 as c_int);
     }

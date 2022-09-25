@@ -16,12 +16,12 @@ use std::{
 
 #[derive(Clone, Debug)]
 #[repr(C)]
-pub struct Command {
-    pub type_: CommandType,
-    pub rect: RenRect,
-    pub color: RenColor,
-    pub font: Option<Box<RenFont>>,
-    pub text: Option<String>,
+pub(super) struct Command {
+    type_: CommandType,
+    rect: RenRect,
+    color: RenColor,
+    font: Option<Box<RenFont>>,
+    text: Option<String>,
 }
 
 impl Command {
@@ -52,22 +52,21 @@ impl Hash for Command {
 
 #[derive(Clone, Copy, Debug, Hash)]
 #[repr(u32)]
-pub enum CommandType {
+enum CommandType {
     FreeFont = 0,
     SetClip = 1,
     DrawText = 2,
     DrawRect = 3,
 }
 
-unsafe extern "C" fn hash<T>(h: *mut c_uint, data: *const T) {
+unsafe fn hash<T>(h: *mut c_uint, data: *const T) {
     let data = slice::from_raw_parts(data as *const u8, mem::size_of::<T>());
     for byte in data {
         *h = (*h ^ *byte as c_uint).wrapping_mul(16777619);
     }
 }
 
-#[inline]
-unsafe extern "C" fn cell_idx(x: c_int, y: c_int) -> c_int {
+fn cell_idx(x: c_int, y: c_int) -> c_int {
     x + y * 80
 }
 
@@ -87,7 +86,7 @@ impl CommandBuffer {
         }
     }
 
-    unsafe extern "C" fn push_command(&mut self, type_: CommandType) -> Option<&mut Command> {
+    unsafe fn push_command(&mut self, type_: CommandType) -> Option<&mut Command> {
         match self.buffer.get_mut(self.index) {
             None => {
                 eprintln!("Warning: (src/rencache.rs): exhausted command buffer");
@@ -102,7 +101,7 @@ impl CommandBuffer {
         }
     }
 
-    unsafe extern "C" fn next_command(&mut self, prev: *mut *mut Command) -> bool {
+    unsafe fn next_command(&mut self, prev: *mut *mut Command) -> bool {
         if (*prev).is_null() {
             *prev = self.buffer.as_mut_ptr();
         } else {
