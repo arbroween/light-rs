@@ -1,4 +1,4 @@
-use crate::{c_str, os_string_from_ptr, rencache::rencache_free_font, renderer::RenFont};
+use crate::{api::renderer::RENCACHE, c_str, os_string_from_ptr, renderer::RenFont};
 use lua_sys::*;
 use std::{
     ffi::CStr,
@@ -34,7 +34,7 @@ unsafe extern "C" fn f_gc(state: *mut lua_State) -> c_int {
     let self_0 = luaL_checkudata(state, 1, c_str!("Font")) as *mut *mut RenFont;
     if !(*self_0).is_null() {
         let font = Box::from_raw(*self_0);
-        rencache_free_font(font);
+        RENCACHE.lock().unwrap().free_font(font);
     }
     0
 }

@@ -1,6 +1,6 @@
 use crate::{
+    api::renderer::RENCACHE,
     c_str, os_string_from_ptr,
-    rencache::rencache_invalidate,
     window::{
         poll_event, set_window_mode, set_window_title, window_get_size, window_has_focus, Event,
     },
@@ -32,7 +32,7 @@ unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
             3
         }
         Some(Event::Exposed) => {
-            rencache_invalidate();
+            RENCACHE.lock().unwrap().invalidate();
             lua_pushstring(state, c_str!("exposed"));
             1
         }

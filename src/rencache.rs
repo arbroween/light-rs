@@ -4,7 +4,6 @@ use crate::{
 };
 use hashers::fnv::FNV1aHasher32;
 use libc::rand;
-use once_cell::sync::Lazy;
 use sdl2_sys::SDL_Window;
 use std::{
     convert::TryInto,
@@ -60,26 +59,6 @@ pub enum CommandType {
     DrawRect = 3,
 }
 
-const CELLS_BUF_SIZE: usize = 4000;
-
-static mut CELLS_BUF1: [c_uint; CELLS_BUF_SIZE] = [0; CELLS_BUF_SIZE];
-
-static mut CELLS_BUF2: [c_uint; CELLS_BUF_SIZE] = [0; CELLS_BUF_SIZE];
-
-static mut CELLS_PREV: ptr::NonNull<c_uint> =
-    unsafe { ptr::NonNull::new_unchecked(CELLS_BUF1.as_ptr() as *mut _) };
-
-static mut CELLS: ptr::NonNull<c_uint> =
-    unsafe { ptr::NonNull::new_unchecked(CELLS_BUF2.as_ptr() as *mut _) };
-
-static mut RECT_BUF: [RenRect; 2000] = [RenRect::default(); 2000];
-
-static mut COMMAND_BUF: Lazy<CommandBuffer> = Lazy::new(CommandBuffer::new);
-
-static mut SCREEN_RECT: RenRect = RenRect::default();
-
-static mut SHOW_DEBUG: bool = false;
-
 unsafe extern "C" fn hash<T>(h: *mut c_uint, data: *const T) {
     let data = slice::from_raw_parts(data as *const u8, mem::size_of::<T>());
     for byte in data {
@@ -133,204 +112,262 @@ impl CommandBuffer {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rencache_show_debug(enable: bool) {
-    SHOW_DEBUG = enable;
+const CELLS_BUF_SIZE: usize = 4000;
+
+enum CellsBufferIndex {
+    CellsBuf1,
+    CellsBuf2,
 }
 
-pub unsafe fn rencache_free_font(font: Box<RenFont>) {
-    let cmd = COMMAND_BUF.push_command(CommandType::FreeFont);
-    if let Some(cmd) = cmd {
-        cmd.font = Some(font);
-    }
+pub(super) struct RenCache {
+    renderer: Renderer,
+    cells_buf1: [c_uint; CELLS_BUF_SIZE],
+    cells_buf2: [c_uint; CELLS_BUF_SIZE],
+    cells: CellsBufferIndex,
+    cells_prev: CellsBufferIndex,
+    command_buf: CommandBuffer,
+    rect_buf: [RenRect; 2000],
+    screen_rect: RenRect,
+    show_debug: bool,
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rencache_set_clip_rect(rect: RenRect) {
-    let cmd = COMMAND_BUF.push_command(CommandType::SetClip);
-    if let Some(cmd) = cmd {
-        cmd.rect = rect.intersection(SCREEN_RECT);
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn rencache_draw_rect(rect: RenRect, color: RenColor) {
-    if !SCREEN_RECT.has_overlap(rect) {
-        return;
-    }
-    let cmd = COMMAND_BUF.push_command(CommandType::DrawRect);
-    if let Some(cmd) = cmd {
-        cmd.rect = rect;
-        cmd.color = color;
-    }
-}
-
-pub unsafe fn rencache_draw_text(
-    font: &mut RenFont,
-    text: &str,
-    x: c_int,
-    y: c_int,
-    color: RenColor,
-) -> c_int {
-    let rect = RenRect {
-        x,
-        y,
-        width: font.measure_width(text),
-        height: font.height(),
-    };
-    if SCREEN_RECT.has_overlap(rect) {
-        let cmd = COMMAND_BUF.push_command(CommandType::DrawText);
-        if let Some(cmd) = cmd {
-            cmd.text = Some(text.to_owned());
-            cmd.color = color;
-            cmd.font = Some(Box::new(font.clone()));
-            (*cmd).rect = rect;
+impl RenCache {
+    pub(super) unsafe fn init(win: ptr::NonNull<SDL_Window>) -> Self {
+        Self {
+            renderer: Renderer::init(win),
+            cells_buf1: [0; CELLS_BUF_SIZE],
+            cells_buf2: [0; CELLS_BUF_SIZE],
+            cells_prev: CellsBufferIndex::CellsBuf1,
+            cells: CellsBufferIndex::CellsBuf2,
+            command_buf: CommandBuffer::new(),
+            rect_buf: [RenRect::default(); 2000],
+            screen_rect: RenRect::default(),
+            show_debug: false,
         }
     }
-    x + rect.width
-}
 
-#[no_mangle]
-pub unsafe extern "C" fn rencache_invalidate() {
-    CELLS_PREV.as_ptr().write_bytes(0xff, CELLS_BUF_SIZE);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn rencache_begin_frame(win: ptr::NonNull<SDL_Window>) {
-    let mut w = 0;
-    let mut h = 0;
-    window_get_size(win, &mut w, &mut h);
-    if SCREEN_RECT.width != w || h != SCREEN_RECT.height {
-        SCREEN_RECT.width = w;
-        SCREEN_RECT.height = h;
-        rencache_invalidate();
-    }
-}
-
-unsafe fn update_overlapping_cells(r: RenRect, h: FNV1aHasher32) {
-    let x1 = r.x / 96;
-    let y1 = r.y / 96;
-    let x2 = (r.x + r.width) / 96;
-    let y2 = (r.y + r.height) / 96;
-    for y in y1..=y2 {
-        for x in x1..=x2 {
-            let idx = cell_idx(x, y);
-            // FIXME: We want to do the opposite of what `Hash` is made for.
-            //        We want the previous `Hasher` to be the `Hash` and write onto `CELLS`.
-            hash(CELLS.as_ptr().offset(idx as isize), &h);
+    fn cells(&mut self) -> &mut [c_uint; CELLS_BUF_SIZE] {
+        match self.cells {
+            CellsBufferIndex::CellsBuf1 => &mut self.cells_buf1,
+            CellsBufferIndex::CellsBuf2 => &mut self.cells_buf2,
         }
     }
-}
 
-unsafe extern "C" fn push_rect(r: RenRect, count: &mut usize) {
-    for rp in RECT_BUF[0..*count as usize].iter_mut().rev() {
-        if rp.has_overlap(r) {
-            *rp = rp.union(r);
-            return;
+    fn cells_prev(&mut self) -> &mut [c_uint; CELLS_BUF_SIZE] {
+        match self.cells_prev {
+            CellsBufferIndex::CellsBuf1 => &mut self.cells_buf1,
+            CellsBufferIndex::CellsBuf2 => &mut self.cells_buf2,
         }
     }
-    let fresh4 = *count;
-    *count += 1;
-    RECT_BUF[fresh4 as usize] = r;
-}
 
-#[no_mangle]
-pub(super) unsafe extern "C" fn rencache_end_frame(
-    renderer: &mut Renderer,
-    win: ptr::NonNull<SDL_Window>,
-) {
-    let mut cmd: *mut Command = ptr::null_mut();
-    let mut cr: RenRect = SCREEN_RECT;
-    while COMMAND_BUF.next_command(&mut cmd) {
-        assert!(!cmd.is_null());
-        if let CommandType::SetClip = (*cmd).type_ {
-            cr = (*cmd).rect;
-        }
-        let r = (*cmd).rect.intersection(cr);
-        if r.width == 0 || r.height == 0 {
-            continue;
-        }
-        let mut h = FNV1aHasher32::default();
-        (*cmd).hash(&mut h);
-        update_overlapping_cells(r, h);
+    pub(super) fn show_debug(&mut self, enable: bool) {
+        self.show_debug = enable;
     }
-    let mut rect_count = 0;
-    let max_x = SCREEN_RECT.width / 96 + 1;
-    let max_y = SCREEN_RECT.height / 96 + 1;
-    for y in 0..max_y {
-        for x in 0..max_x {
-            let idx = cell_idx(x, y);
-            if *CELLS.as_ptr().offset(idx as isize) != *CELLS_PREV.as_ptr().offset(idx as isize) {
-                push_rect(
-                    RenRect {
-                        x,
-                        y,
-                        width: 1,
-                        height: 1,
-                    },
-                    &mut rect_count,
-                );
+
+    pub(super) fn free_font(&mut self, font: Box<RenFont>) {
+        unsafe {
+            let cmd = self.command_buf.push_command(CommandType::FreeFont);
+            if let Some(cmd) = cmd {
+                cmd.font = Some(font);
             }
-            *CELLS_PREV.as_ptr().offset(idx as isize) = 2166136261;
         }
     }
-    for r_0 in &mut RECT_BUF[0..rect_count as usize] {
-        r_0.x *= 96;
-        r_0.y *= 96;
-        r_0.width *= 96;
-        r_0.height *= 96;
-        *r_0 = r_0.intersection(SCREEN_RECT);
+
+    pub(super) fn set_clip_rect(&mut self, rect: RenRect) {
+        unsafe {
+            let cmd = self.command_buf.push_command(CommandType::SetClip);
+            if let Some(cmd) = cmd {
+                cmd.rect = rect.intersection(self.screen_rect);
+            }
+        }
     }
-    let mut has_free_commands = false;
-    for i_0 in 0..rect_count {
-        let r_1: RenRect = RECT_BUF[i_0 as usize];
-        renderer.set_clip_rect(r_1);
-        cmd = ptr::null_mut();
-        while COMMAND_BUF.next_command(&mut cmd) {
-            match (*cmd).type_ {
-                CommandType::FreeFont => {
-                    has_free_commands = true;
+
+    pub(super) fn draw_rect(&mut self, rect: RenRect, color: RenColor) {
+        unsafe {
+            if !self.screen_rect.has_overlap(rect) {
+                return;
+            }
+            let cmd = self.command_buf.push_command(CommandType::DrawRect);
+            if let Some(cmd) = cmd {
+                cmd.rect = rect;
+                cmd.color = color;
+            }
+        }
+    }
+
+    pub(super) fn draw_text(
+        &mut self,
+        font: &mut RenFont,
+        text: &str,
+        x: c_int,
+        y: c_int,
+        color: RenColor,
+    ) -> c_int {
+        unsafe {
+            let rect = RenRect {
+                x,
+                y,
+                width: font.measure_width(text),
+                height: font.height(),
+            };
+            if self.screen_rect.has_overlap(rect) {
+                let cmd = self.command_buf.push_command(CommandType::DrawText);
+                if let Some(cmd) = cmd {
+                    cmd.text = Some(text.to_owned());
+                    cmd.color = color;
+                    cmd.font = Some(Box::new(font.clone()));
+                    (*cmd).rect = rect;
                 }
-                CommandType::SetClip => {
-                    renderer.set_clip_rect((*cmd).rect.intersection(r_1));
+            }
+            x + rect.width
+        }
+    }
+
+    pub(super) fn invalidate(&mut self) {
+        unsafe {
+            self.cells_prev()
+                .as_mut_ptr()
+                .write_bytes(0xff, CELLS_BUF_SIZE);
+        }
+    }
+
+    pub(super) unsafe fn begin_frame(&mut self, win: ptr::NonNull<SDL_Window>) {
+        let mut w = 0;
+        let mut h = 0;
+        window_get_size(win, &mut w, &mut h);
+        if self.screen_rect.width != w || h != self.screen_rect.height {
+            self.screen_rect.width = w;
+            self.screen_rect.height = h;
+            self.invalidate();
+        }
+    }
+
+    fn update_overlapping_cells(&mut self, r: RenRect, h: FNV1aHasher32) {
+        unsafe {
+            let x1 = r.x / 96;
+            let y1 = r.y / 96;
+            let x2 = (r.x + r.width) / 96;
+            let y2 = (r.y + r.height) / 96;
+            for y in y1..=y2 {
+                for x in x1..=x2 {
+                    let idx = cell_idx(x, y);
+                    // FIXME: We want to do the opposite of what `Hash` is made for.
+                    //        We want the previous `Hasher` to be the `Hash` and write onto `CELLS`.
+                    hash(self.cells().as_mut_ptr().offset(idx as isize), &h);
                 }
-                CommandType::DrawRect => {
-                    renderer.draw_rect((*cmd).rect, (*cmd).color, win);
-                }
-                CommandType::DrawText => {
-                    renderer.draw_text(
-                        (*cmd).font.as_deref_mut().unwrap(),
-                        (*cmd).text.as_deref().unwrap(),
-                        (*cmd).rect.x,
-                        (*cmd).rect.y,
-                        (*cmd).color,
-                        win,
+            }
+        }
+    }
+
+    fn push_rect(&mut self, r: RenRect, count: &mut usize) {
+        for rp in self.rect_buf[0..*count as usize].iter_mut().rev() {
+            if rp.has_overlap(r) {
+                *rp = rp.union(r);
+                return;
+            }
+        }
+        let fresh4 = *count;
+        *count += 1;
+        self.rect_buf[fresh4 as usize] = r;
+    }
+
+    pub(super) unsafe fn end_frame(&mut self, win: ptr::NonNull<SDL_Window>) {
+        let mut cmd: *mut Command = ptr::null_mut();
+        let mut cr: RenRect = self.screen_rect;
+        while self.command_buf.next_command(&mut cmd) {
+            assert!(!cmd.is_null());
+            if let CommandType::SetClip = (*cmd).type_ {
+                cr = (*cmd).rect;
+            }
+            let r = (*cmd).rect.intersection(cr);
+            if r.width == 0 || r.height == 0 {
+                continue;
+            }
+            let mut h = FNV1aHasher32::default();
+            (*cmd).hash(&mut h);
+            self.update_overlapping_cells(r, h);
+        }
+        let mut rect_count = 0;
+        let max_x = self.screen_rect.width / 96 + 1;
+        let max_y = self.screen_rect.height / 96 + 1;
+        for y in 0..max_y {
+            for x in 0..max_x {
+                let idx = cell_idx(x, y);
+                if *self.cells().as_mut_ptr().offset(idx as isize)
+                    != *self.cells_prev().as_mut_ptr().offset(idx as isize)
+                {
+                    self.push_rect(
+                        RenRect {
+                            x,
+                            y,
+                            width: 1,
+                            height: 1,
+                        },
+                        &mut rect_count,
                     );
                 }
+                *self.cells_prev().as_mut_ptr().offset(idx as isize) = 2166136261;
             }
         }
-        if SHOW_DEBUG {
-            let color = RenColor {
-                b: rand() as u8,
-                g: rand() as u8,
-                r: rand() as u8,
-                a: 50,
-            };
-            renderer.draw_rect(r_1, color, win);
+        for r_0 in &mut self.rect_buf[0..rect_count as usize] {
+            r_0.x *= 96;
+            r_0.y *= 96;
+            r_0.width *= 96;
+            r_0.height *= 96;
+            *r_0 = r_0.intersection(self.screen_rect);
         }
-    }
-    if rect_count > 0 {
-        renderer.update_rects(&RECT_BUF[..rect_count], win);
-    }
-    if has_free_commands {
-        cmd = ptr::null_mut();
-        while COMMAND_BUF.next_command(&mut cmd) {
-            if let CommandType::FreeFont = (*cmd).type_ {
-                drop((*cmd).font.take());
+        let mut has_free_commands = false;
+        for i_0 in 0..rect_count {
+            let r_1: RenRect = self.rect_buf[i_0 as usize];
+            self.renderer.set_clip_rect(r_1);
+            cmd = ptr::null_mut();
+            while self.command_buf.next_command(&mut cmd) {
+                match (*cmd).type_ {
+                    CommandType::FreeFont => {
+                        has_free_commands = true;
+                    }
+                    CommandType::SetClip => {
+                        self.renderer.set_clip_rect((*cmd).rect.intersection(r_1));
+                    }
+                    CommandType::DrawRect => {
+                        self.renderer.draw_rect((*cmd).rect, (*cmd).color, win);
+                    }
+                    CommandType::DrawText => {
+                        self.renderer.draw_text(
+                            (*cmd).font.as_deref_mut().unwrap(),
+                            (*cmd).text.as_deref().unwrap(),
+                            (*cmd).rect.x,
+                            (*cmd).rect.y,
+                            (*cmd).color,
+                            win,
+                        );
+                    }
+                }
             }
-            let _ = (*cmd).text.take();
+            if self.show_debug {
+                let color = RenColor {
+                    b: rand() as u8,
+                    g: rand() as u8,
+                    r: rand() as u8,
+                    a: 50,
+                };
+                self.renderer.draw_rect(r_1, color, win);
+            }
         }
+        if rect_count > 0 {
+            self.renderer
+                .update_rects(&self.rect_buf[..rect_count], win);
+        }
+        if has_free_commands {
+            cmd = ptr::null_mut();
+            while self.command_buf.next_command(&mut cmd) {
+                if let CommandType::FreeFont = (*cmd).type_ {
+                    drop((*cmd).font.take());
+                }
+                let _ = (*cmd).text.take();
+            }
+        }
+        mem::swap(&mut self.cells, &mut self.cells_prev);
+        self.command_buf.index = 0;
     }
-    mem::swap(&mut CELLS, &mut CELLS_PREV);
-    COMMAND_BUF.index = 0;
 }
