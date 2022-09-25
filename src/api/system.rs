@@ -1,5 +1,9 @@
-use crate::{c_str, os_string_from_ptr, rencache::rencache_invalidate, window};
-use core::slice;
+use crate::{
+    c_str, os_string_from_ptr,
+    rencache::rencache_invalidate,
+    window,
+    window::{poll_event, set_window_mode, set_window_title, window_has_focus, Event},
+};
 use libc::system;
 use lua_sys::*;
 use sdl2_sys::*;
@@ -7,131 +11,89 @@ use std::{
     env::set_current_dir,
     ffi::{CStr, CString},
     fs, mem,
-    os::raw::{c_char, c_double, c_int, c_uint, c_void},
+    os::raw::{c_char, c_double, c_int, c_void},
     ptr,
     time::SystemTime,
 };
 
-pub const WIN_FULLSCREEN: c_uint = 2;
-
-pub const WIN_MAXIMIZED: c_uint = 1;
-
-pub const WIN_NORMAL: c_uint = 0;
-
-unsafe extern "C" fn button_name(button: c_int) -> *const c_char {
-    match button {
-        1 => c_str!("left"),
-        2 => c_str!("middle"),
-        3 => c_str!("right"),
-        _ => c_str!("?"),
-    }
-}
-
-unsafe extern "C" fn key_name(dst: *mut c_char, sym: c_int) -> *mut c_char {
-    let key = CStr::from_ptr(SDL_GetKeyName(sym)).to_bytes_with_nul();
-    let dst = slice::from_raw_parts_mut(dst as *mut u8, key.len());
-    dst.copy_from_slice(key);
-    for c in dst.iter_mut() {
-        *c = c.to_ascii_lowercase();
-    }
-    dst.as_mut_ptr() as *mut c_char
-}
-
 unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
-    let mut buf: [c_char; 16] = [0; 16];
-    let mut mx = 0;
-    let mut my = 0;
-    let mut wx = 0;
-    let mut wy = 0;
-    let mut e = SDL_Event { type_: 0 };
-    loop {
-        if SDL_PollEvent(&mut e) == 0 {
-            return 0;
+    match poll_event(window.unwrap()) {
+        Option::None => 0,
+        Some(Event::Quit) => {
+            lua_pushstring(state, c_str!("quit"));
+            1
         }
-        match e.type_ {
-            256 => {
-                lua_pushstring(state, c_str!("quit"));
-                return 1;
-            }
-            512 => {
-                if e.window.event as c_int == SDL_WindowEventID::SDL_WINDOWEVENT_RESIZED as c_int {
-                    lua_pushstring(state, c_str!("resized"));
-                    lua_pushnumber(state, e.window.data1 as lua_Number);
-                    lua_pushnumber(state, e.window.data2 as lua_Number);
-                    return 3;
-                } else if e.window.event as c_int
-                    == SDL_WindowEventID::SDL_WINDOWEVENT_EXPOSED as c_int
-                {
-                    rencache_invalidate();
-                    lua_pushstring(state, c_str!("exposed"));
-                    return 1;
-                }
-                if e.window.event as c_int
-                    == SDL_WindowEventID::SDL_WINDOWEVENT_FOCUS_GAINED as c_int
-                {
-                    SDL_FlushEvent(SDL_EventType::SDL_KEYDOWN as u32);
-                }
-            }
-            4096 => {
-                SDL_GetGlobalMouseState(&mut mx, &mut my);
-                SDL_GetWindowPosition(window.unwrap().as_ptr(), &mut wx, &mut wy);
-                lua_pushstring(state, c_str!("filedropped"));
-                lua_pushstring(state, e.drop.file);
-                lua_pushnumber(state, (mx - wx) as lua_Number);
-                lua_pushnumber(state, (my - wy) as lua_Number);
-                SDL_free(e.drop.file as *mut c_void);
-                return 4;
-            }
-            768 => {
-                lua_pushstring(state, c_str!("keypressed"));
-                lua_pushstring(state, key_name(buf.as_mut_ptr(), e.key.keysym.sym));
-                return 2;
-            }
-            769 => {
-                lua_pushstring(state, c_str!("keyreleased"));
-                lua_pushstring(state, key_name(buf.as_mut_ptr(), e.key.keysym.sym));
-                return 2;
-            }
-            771 => {
-                lua_pushstring(state, c_str!("textinput"));
-                lua_pushstring(state, e.text.text.as_mut_ptr());
-                return 2;
-            }
-            1025 => {
-                if e.button.button == 1 {
-                    SDL_CaptureMouse(SDL_bool::SDL_TRUE);
-                }
-                lua_pushstring(state, c_str!("mousepressed"));
-                lua_pushstring(state, button_name(e.button.button as c_int));
-                lua_pushnumber(state, e.button.x as lua_Number);
-                lua_pushnumber(state, e.button.y as lua_Number);
-                lua_pushnumber(state, e.button.clicks as lua_Number);
-                return 5;
-            }
-            1026 => {
-                if e.button.button == 1 {
-                    SDL_CaptureMouse(SDL_bool::SDL_FALSE);
-                }
-                lua_pushstring(state, c_str!("mousereleased"));
-                lua_pushstring(state, button_name(e.button.button as c_int));
-                lua_pushnumber(state, e.button.x as lua_Number);
-                lua_pushnumber(state, e.button.y as lua_Number);
-                return 4;
-            }
-            1024 => {
-                lua_pushstring(state, c_str!("mousemoved"));
-                lua_pushnumber(state, e.motion.x as lua_Number);
-                lua_pushnumber(state, e.motion.y as lua_Number);
-                lua_pushnumber(state, e.motion.xrel as lua_Number);
-                lua_pushnumber(state, e.motion.yrel as lua_Number);
-                return 5;
-            }
-            1027 => {
-                lua_pushstring(state, c_str!("mousewheel"));
-                lua_pushnumber(state, e.wheel.y as lua_Number);
-                return 2;
-            }
-            _ => {}
+        Some(Event::Resized { width, height }) => {
+            lua_pushstring(state, c_str!("resized"));
+            lua_pushnumber(state, width as lua_Number);
+            lua_pushnumber(state, height as lua_Number);
+            3
+        }
+        Some(Event::Exposed) => {
+            rencache_invalidate();
+            lua_pushstring(state, c_str!("exposed"));
+            1
+        }
+        Some(Event::FileDropped { file, x, y }) => {
+            let file = CString::new(file).unwrap();
+            lua_pushstring(state, c_str!("filedropped"));
+            lua_pushstring(state, file.as_ptr());
+            lua_pushnumber(state, x as lua_Number);
+            lua_pushnumber(state, y as lua_Number);
+            4
+        }
+        Some(Event::KeyPressed { key }) => {
+            let key = CString::new(key).unwrap();
+            lua_pushstring(state, c_str!("keypressed"));
+            lua_pushstring(state, key.as_ptr());
+            2
+        }
+        Some(Event::KeyReleased { key }) => {
+            let key = CString::new(key).unwrap();
+            lua_pushstring(state, c_str!("keyreleased"));
+            lua_pushstring(state, key.as_ptr());
+            2
+        }
+        Some(Event::TextInput { text }) => {
+            let text = CString::new(text).unwrap();
+            lua_pushstring(state, c_str!("textinput"));
+            lua_pushstring(state, text.as_ptr());
+            2
+        }
+        Some(Event::MousePressed {
+            button,
+            x,
+            y,
+            clicks,
+        }) => {
+            let name = CString::new(button.name()).unwrap();
+            lua_pushstring(state, c_str!("mousepressed"));
+            lua_pushstring(state, name.as_ptr());
+            lua_pushnumber(state, x as lua_Number);
+            lua_pushnumber(state, y as lua_Number);
+            lua_pushnumber(state, clicks as lua_Number);
+            5
+        }
+        Some(Event::MouseReleased { button, x, y }) => {
+            let name = CString::new(button.name()).unwrap();
+            lua_pushstring(state, c_str!("mousereleased"));
+            lua_pushstring(state, name.as_ptr());
+            lua_pushnumber(state, x as lua_Number);
+            lua_pushnumber(state, y as lua_Number);
+            4
+        }
+        Some(Event::MouseMoved { x, y, xrel, yrel }) => {
+            lua_pushstring(state, c_str!("mousemoved"));
+            lua_pushnumber(state, x as lua_Number);
+            lua_pushnumber(state, y as lua_Number);
+            lua_pushnumber(state, xrel as lua_Number);
+            lua_pushnumber(state, yrel as lua_Number);
+            5
+        }
+        Some(Event::MouseWheel { y }) => {
+            lua_pushstring(state, c_str!("mousewheel"));
+            lua_pushnumber(state, y as lua_Number);
+            2
         }
     }
 }
@@ -183,7 +145,8 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
 
 unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> c_int {
     let title = luaL_checklstring(state, 1, ptr::null_mut());
-    SDL_SetWindowTitle(window.unwrap().as_ptr(), title);
+    let title = CStr::from_ptr(title).to_str().unwrap();
+    set_window_title(window.unwrap(), title);
     0
 }
 
@@ -193,32 +156,14 @@ static mut WINDOW_OPTS: [*const c_char; 4] = [
     c_str!("fullscreen"),
     ptr::null(),
 ];
-
 unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> c_int {
     let n = luaL_checkoption(state, 1, c_str!("normal"), WINDOW_OPTS.as_ptr());
-    SDL_SetWindowFullscreen(
-        window.unwrap().as_ptr(),
-        if n == WIN_FULLSCREEN as c_int {
-            SDL_WindowFlags::SDL_WINDOW_FULLSCREEN_DESKTOP as u32
-        } else {
-            0
-        },
-    );
-    if n == WIN_NORMAL as c_int {
-        SDL_RestoreWindow(window.unwrap().as_ptr());
-    }
-    if n == WIN_MAXIMIZED as c_int {
-        SDL_MaximizeWindow(window.unwrap().as_ptr());
-    }
+    set_window_mode(window.unwrap(), n);
     0
 }
 
 unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> c_int {
-    let flags = SDL_GetWindowFlags(window.unwrap().as_ptr());
-    lua_pushboolean(
-        state,
-        (flags & SDL_WindowFlags::SDL_WINDOW_INPUT_FOCUS as c_uint) as c_int,
-    );
+    lua_pushboolean(state, window_has_focus(window.unwrap()) as c_int);
     1
 }
 

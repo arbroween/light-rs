@@ -13,6 +13,7 @@ use std::{
 pub mod api;
 pub mod rencache;
 pub mod renderer;
+pub mod window;
 
 macro_rules! c_str {
     ($lit:expr) => {
