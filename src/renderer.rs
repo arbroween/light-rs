@@ -464,10 +464,3 @@ impl Renderer {
         x
     }
 }
-
-#[no_mangle]
-pub unsafe extern "C" fn ren_get_size(win: ptr::NonNull<SDL_Window>, x: &mut c_int, y: &mut c_int) {
-    let surf = ptr::NonNull::new(SDL_GetWindowSurface(win.as_ptr())).unwrap();
-    *x = surf.as_ref().w;
-    *y = surf.as_ref().h;
-}

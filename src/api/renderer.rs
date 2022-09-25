@@ -5,15 +5,15 @@ use crate::{
         rencache_begin_frame, rencache_draw_rect, rencache_draw_text, rencache_end_frame,
         rencache_set_clip_rect, rencache_show_debug,
     },
-    renderer::{ren_get_size, RenColor, RenFont, RenRect, Renderer},
-    window,
+    renderer::{RenColor, RenFont, RenRect, Renderer},
+    WINDOW,
 };
 use lua_sys::*;
 use once_cell::sync::Lazy;
 use std::{ffi::CStr, mem, os::raw::c_int, ptr, sync::Mutex};
 
 static RENDERER: Lazy<Mutex<Renderer>> =
-    Lazy::new(|| Mutex::new(unsafe { Renderer::init(window.unwrap()) }));
+    Lazy::new(|| Mutex::new(unsafe { Renderer::init(WINDOW.unwrap()) }));
 
 unsafe extern "C" fn checkcolor(state: *mut lua_State, idx: c_int, def: c_int) -> RenColor {
     let mut color = RenColor::default();
@@ -43,22 +43,13 @@ unsafe extern "C" fn f_show_debug(state: *mut lua_State) -> c_int {
     0
 }
 
-unsafe extern "C" fn f_get_size(state: *mut lua_State) -> c_int {
-    let mut w = 0;
-    let mut h = 0;
-    ren_get_size(window.unwrap(), &mut w, &mut h);
-    lua_pushnumber(state, w as lua_Number);
-    lua_pushnumber(state, h as lua_Number);
-    2
-}
-
 unsafe extern "C" fn f_begin_frame(_: *mut lua_State) -> c_int {
-    rencache_begin_frame(window.unwrap());
+    rencache_begin_frame(WINDOW.unwrap());
     0
 }
 
 unsafe extern "C" fn f_end_frame(_: *mut lua_State) -> c_int {
-    rencache_end_frame(&mut RENDERER.lock().unwrap(), window.unwrap());
+    rencache_end_frame(&mut RENDERER.lock().unwrap(), WINDOW.unwrap());
     0
 }
 
@@ -97,14 +88,10 @@ unsafe extern "C" fn f_draw_text(state: *mut lua_State) -> c_int {
     1
 }
 
-static mut LIB: [luaL_Reg; 8] = [
+static mut LIB: [luaL_Reg; 7] = [
     luaL_Reg {
         name: c_str!("show_debug"),
         func: Some(f_show_debug),
-    },
-    luaL_Reg {
-        name: c_str!("get_size"),
-        func: Some(f_get_size),
     },
     luaL_Reg {
         name: c_str!("begin_frame"),
@@ -137,7 +124,7 @@ pub unsafe extern "C" fn luaopen_renderer(state: *mut lua_State) -> c_int {
     lua_createtable(
         state,
         0,
-        mem::size_of::<[luaL_Reg; 8]>()
+        mem::size_of::<[luaL_Reg; 7]>()
             .wrapping_div(mem::size_of::<luaL_Reg>())
             .wrapping_sub(1) as c_int,
     );

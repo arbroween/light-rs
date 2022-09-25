@@ -1,8 +1,10 @@
 use crate::{
     c_str, os_string_from_ptr,
     rencache::rencache_invalidate,
-    window,
-    window::{poll_event, set_window_mode, set_window_title, window_has_focus, Event},
+    window::{
+        poll_event, set_window_mode, set_window_title, window_get_size, window_has_focus, Event,
+    },
+    WINDOW,
 };
 use libc::system;
 use lua_sys::*;
@@ -17,7 +19,7 @@ use std::{
 };
 
 unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
-    match poll_event(window.unwrap()) {
+    match poll_event(WINDOW.unwrap()) {
         Option::None => 0,
         Some(Event::Quit) => {
             lua_pushstring(state, c_str!("quit"));
@@ -146,7 +148,7 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
 unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> c_int {
     let title = luaL_checklstring(state, 1, ptr::null_mut());
     let title = CStr::from_ptr(title).to_str().unwrap();
-    set_window_title(window.unwrap(), title);
+    set_window_title(WINDOW.unwrap(), title);
     0
 }
 
@@ -158,13 +160,22 @@ static mut WINDOW_OPTS: [*const c_char; 4] = [
 ];
 unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> c_int {
     let n = luaL_checkoption(state, 1, c_str!("normal"), WINDOW_OPTS.as_ptr());
-    set_window_mode(window.unwrap(), n);
+    set_window_mode(WINDOW.unwrap(), n);
     0
 }
 
 unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> c_int {
-    lua_pushboolean(state, window_has_focus(window.unwrap()) as c_int);
+    lua_pushboolean(state, window_has_focus(WINDOW.unwrap()) as c_int);
     1
+}
+
+unsafe extern "C" fn f_get_size(state: *mut lua_State) -> c_int {
+    let mut w = 0;
+    let mut h = 0;
+    window_get_size(WINDOW.unwrap(), &mut w, &mut h);
+    lua_pushnumber(state, w as lua_Number);
+    lua_pushnumber(state, h as lua_Number);
+    2
 }
 
 unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> c_int {
@@ -350,7 +361,7 @@ unsafe extern "C" fn f_fuzzy_match(state: *mut lua_State) -> c_int {
     1
 }
 
-static mut LIB: [luaL_Reg; 18] = [
+static mut LIB: [luaL_Reg; 19] = [
     luaL_Reg {
         name: c_str!("poll_event"),
         func: Some(f_poll_event),
@@ -374,6 +385,10 @@ static mut LIB: [luaL_Reg; 18] = [
     luaL_Reg {
         name: c_str!("window_has_focus"),
         func: Some(f_window_has_focus),
+    },
+    luaL_Reg {
+        name: c_str!("get_size"),
+        func: Some(f_get_size),
     },
     luaL_Reg {
         name: c_str!("show_confirm_dialog"),
@@ -430,7 +445,7 @@ pub unsafe extern "C" fn luaopen_system(state: *mut lua_State) -> c_int {
     lua_createtable(
         state,
         0,
-        mem::size_of::<[luaL_Reg; 18]>()
+        mem::size_of::<[luaL_Reg; 19]>()
             .wrapping_div(mem::size_of::<luaL_Reg>())
             .wrapping_sub(1) as c_int,
     );

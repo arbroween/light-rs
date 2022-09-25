@@ -381,7 +381,7 @@ function core.step()
     core.try(core.on_event, "mousemoved", mouse.x, mouse.y, mouse.dx, mouse.dy)
   end
 
-  local width, height = renderer.get_size()
+  local width, height = system.get_size()
 
   -- update
   core.root_view.size.x, core.root_view.size.y = width, height

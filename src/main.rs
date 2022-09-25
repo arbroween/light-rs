@@ -22,8 +22,7 @@ macro_rules! c_str {
 }
 pub(crate) use c_str;
 
-#[no_mangle]
-pub static mut window: Option<ptr::NonNull<SDL_Window>> = Option::None;
+pub static mut WINDOW: Option<ptr::NonNull<SDL_Window>> = Option::None;
 
 unsafe extern "C" fn get_scale() -> c_double {
     let mut dpi = 0.0;
@@ -1162,7 +1161,7 @@ unsafe extern "C" fn init_window_icon() {
         0xff0000,
         0xff000000,
     );
-    SDL_SetWindowIcon(window.unwrap().as_ptr(), surf);
+    SDL_SetWindowIcon(WINDOW.unwrap().as_ptr(), surf);
     SDL_FreeSurface(surf);
 }
 
@@ -1185,7 +1184,7 @@ fn main() {
             driverdata: ptr::null_mut(),
         };
         SDL_GetCurrentDisplayMode(0, &mut dm);
-        window = ptr::NonNull::new(SDL_CreateWindow(
+        WINDOW = ptr::NonNull::new(SDL_CreateWindow(
             c_str!(""),
             0x1fff0000,
             0x1fff0000,
@@ -1245,6 +1244,6 @@ fn main() {
         ) != 0
             || lua_pcallk(state, 0, -1, 0, 0, Option::None) != 0;
         lua_close(state);
-        SDL_DestroyWindow(window.unwrap().as_ptr());
+        SDL_DestroyWindow(WINDOW.unwrap().as_ptr());
     }
 }

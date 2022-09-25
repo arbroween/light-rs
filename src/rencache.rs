@@ -1,4 +1,7 @@
-use crate::renderer::{ren_get_size, RenColor, RenFont, RenRect, Renderer};
+use crate::{
+    renderer::{RenColor, RenFont, RenRect, Renderer},
+    window::window_get_size,
+};
 use hashers::fnv::FNV1aHasher32;
 use libc::rand;
 use once_cell::sync::Lazy;
@@ -196,7 +199,7 @@ pub unsafe extern "C" fn rencache_invalidate() {
 pub unsafe extern "C" fn rencache_begin_frame(win: ptr::NonNull<SDL_Window>) {
     let mut w = 0;
     let mut h = 0;
-    ren_get_size(win, &mut w, &mut h);
+    window_get_size(win, &mut w, &mut h);
     if SCREEN_RECT.width != w || h != SCREEN_RECT.height {
         SCREEN_RECT.width = w;
         SCREEN_RECT.height = h;

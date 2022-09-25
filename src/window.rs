@@ -210,3 +210,9 @@ pub(super) unsafe fn window_has_focus(win: ptr::NonNull<SDL_Window>) -> bool {
     let flags = SDL_GetWindowFlags(win.as_ptr());
     flags & SDL_WindowFlags::SDL_WINDOW_INPUT_FOCUS as c_uint != 0
 }
+
+pub(super) unsafe fn window_get_size(win: ptr::NonNull<SDL_Window>, x: &mut c_int, y: &mut c_int) {
+    let surf = ptr::NonNull::new(SDL_GetWindowSurface(win.as_ptr())).unwrap();
+    *x = surf.as_ref().w;
+    *y = surf.as_ref().h;
+}
