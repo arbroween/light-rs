@@ -1,10 +1,8 @@
-use crate::renderer::{
-    ren_draw_rect, ren_draw_text, ren_get_size, ren_set_clip_rect, ren_update_rects, RenColor,
-    RenFont, RenRect,
-};
+use crate::renderer::{ren_get_size, RenColor, RenFont, RenRect, Renderer};
 use hashers::fnv::FNV1aHasher32;
 use libc::rand;
 use once_cell::sync::Lazy;
+use sdl2_sys::SDL_Window;
 use std::{
     convert::TryInto,
     hash::{Hash, Hasher},
@@ -195,10 +193,10 @@ pub unsafe extern "C" fn rencache_invalidate() {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rencache_begin_frame() {
+pub unsafe extern "C" fn rencache_begin_frame(win: ptr::NonNull<SDL_Window>) {
     let mut w = 0;
     let mut h = 0;
-    ren_get_size(&mut w, &mut h);
+    ren_get_size(win, &mut w, &mut h);
     if SCREEN_RECT.width != w || h != SCREEN_RECT.height {
         SCREEN_RECT.width = w;
         SCREEN_RECT.height = h;
@@ -234,7 +232,10 @@ unsafe extern "C" fn push_rect(r: RenRect, count: &mut usize) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rencache_end_frame() {
+pub(super) unsafe extern "C" fn rencache_end_frame(
+    renderer: &mut Renderer,
+    win: ptr::NonNull<SDL_Window>,
+) {
     let mut cmd: *mut Command = ptr::null_mut();
     let mut cr: RenRect = SCREEN_RECT;
     while COMMAND_BUF.next_command(&mut cmd) {
@@ -280,7 +281,7 @@ pub unsafe extern "C" fn rencache_end_frame() {
     let mut has_free_commands = false;
     for i_0 in 0..rect_count {
         let r_1: RenRect = RECT_BUF[i_0 as usize];
-        ren_set_clip_rect(r_1);
+        renderer.set_clip_rect(r_1);
         cmd = ptr::null_mut();
         while COMMAND_BUF.next_command(&mut cmd) {
             match (*cmd).type_ {
@@ -288,18 +289,19 @@ pub unsafe extern "C" fn rencache_end_frame() {
                     has_free_commands = true;
                 }
                 CommandType::SetClip => {
-                    ren_set_clip_rect((*cmd).rect.intersection(r_1));
+                    renderer.set_clip_rect((*cmd).rect.intersection(r_1));
                 }
                 CommandType::DrawRect => {
-                    ren_draw_rect((*cmd).rect, (*cmd).color);
+                    renderer.draw_rect((*cmd).rect, (*cmd).color, win);
                 }
                 CommandType::DrawText => {
-                    ren_draw_text(
+                    renderer.draw_text(
                         (*cmd).font.as_deref_mut().unwrap(),
                         (*cmd).text.as_deref().unwrap(),
                         (*cmd).rect.x,
                         (*cmd).rect.y,
                         (*cmd).color,
+                        win,
                     );
                 }
             }
@@ -311,11 +313,11 @@ pub unsafe extern "C" fn rencache_end_frame() {
                 r: rand() as u8,
                 a: 50,
             };
-            ren_draw_rect(r_1, color);
+            renderer.draw_rect(r_1, color, win);
         }
     }
     if rect_count > 0 {
-        ren_update_rects(&RECT_BUF[..rect_count]);
+        renderer.update_rects(&RECT_BUF[..rect_count], win);
     }
     if has_free_commands {
         cmd = ptr::null_mut();

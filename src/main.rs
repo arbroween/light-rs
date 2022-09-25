@@ -2,7 +2,6 @@
 
 use api::api_load_libs;
 use lua_sys::*;
-use renderer::ren_init;
 use sdl2_sys::*;
 use std::{
     ffi::{CString, OsString},
@@ -1196,7 +1195,6 @@ fn main() {
                 | SDL_WindowFlags::SDL_WINDOW_HIDDEN as u32,
         ));
         init_window_icon();
-        ren_init(window);
         let state = luaL_newstate();
         luaL_openlibs(state);
         api_load_libs(state);
