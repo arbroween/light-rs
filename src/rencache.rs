@@ -4,7 +4,7 @@ use crate::{
 };
 use hashers::fnv::FNV1aHasher32;
 use libc::rand;
-use sdl2_sys::SDL_Window;
+use sdl2::{video::Window, EventPump};
 use std::{
     convert::TryInto,
     hash::{Hash, Hasher},
@@ -131,9 +131,9 @@ pub(super) struct RenCache {
 }
 
 impl RenCache {
-    pub(super) unsafe fn init(win: ptr::NonNull<SDL_Window>) -> Self {
+    pub(super) fn init(win: &Window, event_pump: &EventPump) -> Self {
         Self {
-            renderer: Renderer::init(win),
+            renderer: Renderer::init(win, event_pump),
             cells_buf1: [0; CELLS_BUF_SIZE],
             cells_buf2: [0; CELLS_BUF_SIZE],
             cells_prev: CellsBufferIndex::CellsBuf1,
@@ -230,10 +230,10 @@ impl RenCache {
         }
     }
 
-    pub(super) unsafe fn begin_frame(&mut self, win: ptr::NonNull<SDL_Window>) {
+    pub(super) fn begin_frame(&mut self, win: &Window, event_pump: &EventPump) {
         let mut w = 0;
         let mut h = 0;
-        window_get_size(win, &mut w, &mut h);
+        window_get_size(win, event_pump, &mut w, &mut h);
         if self.screen_rect.width != w || h != self.screen_rect.height {
             self.screen_rect.width = w;
             self.screen_rect.height = h;
@@ -270,103 +270,107 @@ impl RenCache {
         self.rect_buf[fresh4 as usize] = r;
     }
 
-    pub(super) unsafe fn end_frame(&mut self, win: ptr::NonNull<SDL_Window>) {
-        let mut cmd: *mut Command = ptr::null_mut();
-        let mut cr: RenRect = self.screen_rect;
-        while self.command_buf.next_command(&mut cmd) {
-            assert!(!cmd.is_null());
-            if let CommandType::SetClip = (*cmd).type_ {
-                cr = (*cmd).rect;
-            }
-            let r = (*cmd).rect.intersection(cr);
-            if r.width == 0 || r.height == 0 {
-                continue;
-            }
-            let mut h = FNV1aHasher32::default();
-            (*cmd).hash(&mut h);
-            self.update_overlapping_cells(r, h);
-        }
-        let mut rect_count = 0;
-        let max_x = self.screen_rect.width / 96 + 1;
-        let max_y = self.screen_rect.height / 96 + 1;
-        for y in 0..max_y {
-            for x in 0..max_x {
-                let idx = cell_idx(x, y);
-                if *self.cells().as_mut_ptr().offset(idx as isize)
-                    != *self.cells_prev().as_mut_ptr().offset(idx as isize)
-                {
-                    self.push_rect(
-                        RenRect {
-                            x,
-                            y,
-                            width: 1,
-                            height: 1,
-                        },
-                        &mut rect_count,
-                    );
-                }
-                *self.cells_prev().as_mut_ptr().offset(idx as isize) = 2166136261;
-            }
-        }
-        for r_0 in &mut self.rect_buf[0..rect_count as usize] {
-            r_0.x *= 96;
-            r_0.y *= 96;
-            r_0.width *= 96;
-            r_0.height *= 96;
-            *r_0 = r_0.intersection(self.screen_rect);
-        }
-        let mut has_free_commands = false;
-        for i_0 in 0..rect_count {
-            let r_1: RenRect = self.rect_buf[i_0 as usize];
-            self.renderer.set_clip_rect(r_1);
-            cmd = ptr::null_mut();
+    pub(super) fn end_frame(&mut self, win: &mut Window, event_pump: &EventPump) {
+        unsafe {
+            let mut cmd: *mut Command = ptr::null_mut();
+            let mut cr: RenRect = self.screen_rect;
             while self.command_buf.next_command(&mut cmd) {
-                match (*cmd).type_ {
-                    CommandType::FreeFont => {
-                        has_free_commands = true;
-                    }
-                    CommandType::SetClip => {
-                        self.renderer.set_clip_rect((*cmd).rect.intersection(r_1));
-                    }
-                    CommandType::DrawRect => {
-                        self.renderer.draw_rect((*cmd).rect, (*cmd).color, win);
-                    }
-                    CommandType::DrawText => {
-                        self.renderer.draw_text(
-                            (*cmd).font.as_deref_mut().unwrap(),
-                            (*cmd).text.as_deref().unwrap(),
-                            (*cmd).rect.x,
-                            (*cmd).rect.y,
-                            (*cmd).color,
-                            win,
+                assert!(!cmd.is_null());
+                if let CommandType::SetClip = (*cmd).type_ {
+                    cr = (*cmd).rect;
+                }
+                let r = (*cmd).rect.intersection(cr);
+                if r.width == 0 || r.height == 0 {
+                    continue;
+                }
+                let mut h = FNV1aHasher32::default();
+                (*cmd).hash(&mut h);
+                self.update_overlapping_cells(r, h);
+            }
+            let mut rect_count = 0;
+            let max_x = self.screen_rect.width / 96 + 1;
+            let max_y = self.screen_rect.height / 96 + 1;
+            for y in 0..max_y {
+                for x in 0..max_x {
+                    let idx = cell_idx(x, y);
+                    if *self.cells().as_mut_ptr().offset(idx as isize)
+                        != *self.cells_prev().as_mut_ptr().offset(idx as isize)
+                    {
+                        self.push_rect(
+                            RenRect {
+                                x,
+                                y,
+                                width: 1,
+                                height: 1,
+                            },
+                            &mut rect_count,
                         );
                     }
+                    *self.cells_prev().as_mut_ptr().offset(idx as isize) = 2166136261;
                 }
             }
-            if self.show_debug {
-                let color = RenColor {
-                    b: rand() as u8,
-                    g: rand() as u8,
-                    r: rand() as u8,
-                    a: 50,
-                };
-                self.renderer.draw_rect(r_1, color, win);
+            for r_0 in &mut self.rect_buf[0..rect_count as usize] {
+                r_0.x *= 96;
+                r_0.y *= 96;
+                r_0.width *= 96;
+                r_0.height *= 96;
+                *r_0 = r_0.intersection(self.screen_rect);
             }
-        }
-        if rect_count > 0 {
-            self.renderer
-                .update_rects(&self.rect_buf[..rect_count], win);
-        }
-        if has_free_commands {
-            cmd = ptr::null_mut();
-            while self.command_buf.next_command(&mut cmd) {
-                if let CommandType::FreeFont = (*cmd).type_ {
-                    drop((*cmd).font.take());
+            let mut has_free_commands = false;
+            for i_0 in 0..rect_count {
+                let r_1: RenRect = self.rect_buf[i_0 as usize];
+                self.renderer.set_clip_rect(r_1);
+                cmd = ptr::null_mut();
+                while self.command_buf.next_command(&mut cmd) {
+                    match (*cmd).type_ {
+                        CommandType::FreeFont => {
+                            has_free_commands = true;
+                        }
+                        CommandType::SetClip => {
+                            self.renderer.set_clip_rect((*cmd).rect.intersection(r_1));
+                        }
+                        CommandType::DrawRect => {
+                            self.renderer
+                                .draw_rect((*cmd).rect, (*cmd).color, win, event_pump);
+                        }
+                        CommandType::DrawText => {
+                            self.renderer.draw_text(
+                                (*cmd).font.as_deref_mut().unwrap(),
+                                (*cmd).text.as_deref().unwrap(),
+                                (*cmd).rect.x,
+                                (*cmd).rect.y,
+                                (*cmd).color,
+                                win,
+                                event_pump,
+                            );
+                        }
+                    }
                 }
-                let _ = (*cmd).text.take();
+                if self.show_debug {
+                    let color = RenColor {
+                        b: rand() as u8,
+                        g: rand() as u8,
+                        r: rand() as u8,
+                        a: 50,
+                    };
+                    self.renderer.draw_rect(r_1, color, win, event_pump);
+                }
             }
+            if rect_count > 0 {
+                self.renderer
+                    .update_rects(&self.rect_buf[..rect_count], win, event_pump);
+            }
+            if has_free_commands {
+                cmd = ptr::null_mut();
+                while self.command_buf.next_command(&mut cmd) {
+                    if let CommandType::FreeFont = (*cmd).type_ {
+                        drop((*cmd).font.take());
+                    }
+                    let _ = (*cmd).text.take();
+                }
+            }
+            mem::swap(&mut self.cells, &mut self.cells_prev);
+            self.command_buf.index = 0;
         }
-        mem::swap(&mut self.cells, &mut self.cells_prev);
-        self.command_buf.index = 0;
     }
 }

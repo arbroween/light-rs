@@ -1,12 +1,12 @@
-use sdl2_sys::*;
+use sdl2::{video::Window, EventPump};
 use stb_truetype_rust::*;
 use std::{
     fs,
     hash::Hash,
-    mem::MaybeUninit,
+    mem::{self, MaybeUninit},
     os::raw::{c_double, c_float, c_int},
     path::Path,
-    ptr, slice,
+    slice,
 };
 
 #[derive(Clone, Debug, Hash)]
@@ -284,28 +284,34 @@ pub(super) struct Renderer {
 }
 
 impl Renderer {
-    pub(super) unsafe fn init(win: ptr::NonNull<SDL_Window>) -> Self {
-        let surf = ptr::NonNull::new(SDL_GetWindowSurface(win.as_ptr())).unwrap();
+    pub(super) fn init(win: &Window, event_pump: &EventPump) -> Self {
+        let surf = win.surface(event_pump).unwrap();
         Self {
             clip: Clip {
                 left: 0,
                 top: 0,
-                right: surf.as_ref().w,
-                bottom: surf.as_ref().h,
+                right: surf.width() as i32,
+                bottom: surf.height() as i32,
             },
             initial_frame: true,
         }
     }
 
-    pub(super) unsafe fn update_rects(&mut self, rects: &[RenRect], win: ptr::NonNull<SDL_Window>) {
-        SDL_UpdateWindowSurfaceRects(
-            win.as_ptr(),
-            rects.as_ptr() as *const SDL_Rect,
-            rects.len() as c_int,
-        );
-        if self.initial_frame {
-            SDL_ShowWindow(win.as_ptr());
-            self.initial_frame = false;
+    pub(super) fn update_rects(
+        &mut self,
+        rects: &[RenRect],
+        win: &mut Window,
+        event_pump: &EventPump,
+    ) {
+        unsafe {
+            win.surface(event_pump)
+                .expect("Could not get window surface")
+                .update_window_rects(mem::transmute(rects))
+                .expect("Could not update window surface");
+            if self.initial_frame {
+                win.show();
+                self.initial_frame = false;
+            }
         }
     }
 
@@ -316,11 +322,12 @@ impl Renderer {
         self.clip.bottom = rect.y + rect.height;
     }
 
-    pub(super) unsafe fn draw_rect(
+    pub(super) fn draw_rect(
         &mut self,
         rect: RenRect,
         color: RenColor,
-        win: ptr::NonNull<SDL_Window>,
+        win: &Window,
+        event_pump: &EventPump,
     ) {
         if color.a == 0 {
             return;
@@ -347,42 +354,52 @@ impl Renderer {
         } else {
             y2
         };
-        let surf = ptr::NonNull::new(SDL_GetWindowSurface(win.as_ptr())).unwrap();
-        // FIXME: The original C code seems to do out of bounds access.
-        //        Using twice the length is a hack to use checked indexing.
-        let mut d = slice::from_raw_parts_mut(
-            (*surf.as_ptr()).pixels as *mut RenColor,
-            (surf.as_ref().w * surf.as_ref().h) as usize * 2,
-        );
-        d = &mut d[(x1 + y1 * surf.as_ref().w) as usize..];
-        let dr = (surf.as_ref().w - (x2 - x1)) as usize;
-        if color.a == 0xff {
-            for _ in y1..y2 {
-                for _ in x1..x2 {
-                    d[0] = color;
-                    d = &mut d[1..];
+        let mut surf = win.surface(event_pump).unwrap();
+        let width = surf.width();
+        let height = surf.height();
+        surf.with_lock_mut(|d| {
+            // FIXME: The original C code seems to do out of bounds access.
+            //        Using twice the length is a hack to use checked indexing.
+            // SAFETY: The pixels format was configured to have the same layout
+            //         as RenColor when creating the window.
+            let mut d = unsafe {
+                slice::from_raw_parts_mut(
+                    d.as_mut_ptr() as *mut RenColor,
+                    (width * height) as usize * 2,
+                )
+            };
+
+            d = &mut d[(x1 + y1 * width as i32) as usize..];
+            let dr = (width as i32 - (x2 - x1)) as usize;
+            if color.a == 0xff {
+                for _ in y1..y2 {
+                    for _ in x1..x2 {
+                        d[0] = color;
+                        d = &mut d[1..];
+                    }
+                    d = &mut d[dr..];
                 }
-                d = &mut d[dr..];
-            }
-        } else {
-            for _ in y1..y2 {
-                for _ in x1..x2 {
-                    d[0] = d[0].blend_pixel(color);
-                    d = &mut d[1..];
+            } else {
+                for _ in y1..y2 {
+                    for _ in x1..x2 {
+                        d[0] = d[0].blend_pixel(color);
+                        d = &mut d[1..];
+                    }
+                    d = &mut d[dr..];
                 }
-                d = &mut d[dr..];
-            }
-        };
+            };
+        });
     }
 
-    pub(super) unsafe fn draw_image(
+    pub(super) fn draw_image(
         &mut self,
         image: &RenImage,
         mut sub: &mut RenRect,
         mut x: c_int,
         mut y: c_int,
         color: RenColor,
-        win: ptr::NonNull<SDL_Window>,
+        win: &Window,
+        event_pump: &EventPump,
     ) {
         if color.a == 0 {
             return;
@@ -410,37 +427,47 @@ impl Renderer {
         if sub.width <= 0 || sub.height <= 0 {
             return;
         }
-        let surf = ptr::NonNull::new(SDL_GetWindowSurface(win.as_ptr())).unwrap();
+        let mut surf = win.surface(event_pump).unwrap();
         let mut s = image.pixels.as_ref();
-        // FIXME: The original C code seems to do out of bounds access.
-        //        Using twice the length is a hack to use checked indexing.
-        let mut d = slice::from_raw_parts_mut(
-            (*surf.as_ptr()).pixels as *mut RenColor,
-            (surf.as_ref().w * surf.as_ref().h) as usize * 2,
-        );
-        s = &s[(sub.x + sub.y * image.width) as usize..];
-        d = &mut d[(x + y * surf.as_ref().w) as usize..];
-        let sr = image.width - sub.width;
-        let dr = surf.as_ref().w - sub.width;
-        for _ in 0..sub.height {
-            for _ in 0..sub.width {
-                d[0] = d[0].blend_pixel2(s[0], color);
-                d = &mut d[1..];
-                s = &s[1..];
+        let width = surf.width();
+        let height = surf.height();
+        surf.with_lock_mut(|d| {
+            // FIXME: The original C code seems to do out of bounds access.
+            //        Using twice the length is a hack to use checked indexing.
+            // SAFETY: The pixels format was configured to have the same layout
+            //         as RenColor when creating the window.
+            let mut d = unsafe {
+                slice::from_raw_parts_mut(
+                    d.as_mut_ptr() as *mut RenColor,
+                    (width * height) as usize * 2,
+                )
+            };
+
+            s = &s[(sub.x + sub.y * image.width) as usize..];
+            d = &mut d[(x + y * width as i32) as usize..];
+            let sr = image.width - sub.width;
+            let dr = width as i32 - sub.width;
+            for _ in 0..sub.height {
+                for _ in 0..sub.width {
+                    d[0] = d[0].blend_pixel2(s[0], color);
+                    d = &mut d[1..];
+                    s = &s[1..];
+                }
+                d = &mut d[dr as usize..];
+                s = &s[sr as usize..];
             }
-            d = &mut d[dr as usize..];
-            s = &s[sr as usize..];
-        }
+        })
     }
 
-    pub(super) unsafe fn draw_text(
+    pub(super) fn draw_text(
         &mut self,
         font: &mut RenFont,
         text: &str,
         mut x: c_int,
         y: c_int,
         color: RenColor,
-        win: ptr::NonNull<SDL_Window>,
+        win: &Window,
+        event_pump: &EventPump,
     ) -> c_int {
         let mut rect = RenRect::default();
         let p = text;
@@ -458,6 +485,7 @@ impl Renderer {
                 (y as c_float + g.yoff) as c_int,
                 color,
                 win,
+                event_pump,
             );
             x = (x as c_float + g.xadvance) as c_int;
         }

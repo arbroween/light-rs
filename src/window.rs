@@ -1,9 +1,11 @@
-use sdl2_sys::*;
-use std::{
-    ffi::{CStr, CString},
-    os::raw::{c_int, c_uint, c_void},
-    ptr,
+use sdl2::{
+    event::{Event as SdlEvent, EventType, WindowEvent},
+    mouse::{MouseButton, MouseUtil},
+    sys::SDL_WindowFlags,
+    video::{FullscreenType, Window},
+    EventPump, EventSubsystem,
 };
+use std::os::raw::{c_int, c_uint};
 
 const WIN_FULLSCREEN: c_uint = 2;
 
@@ -11,6 +13,7 @@ const WIN_MAXIMIZED: c_uint = 1;
 
 const WIN_NORMAL: c_uint = 0;
 
+#[derive(Debug)]
 pub(super) enum Event {
     Quit,
     Resized {
@@ -54,13 +57,7 @@ pub(super) enum Event {
     },
 }
 
-unsafe fn key_name(sym: c_int) -> String {
-    CStr::from_ptr(SDL_GetKeyName(sym))
-        .to_str()
-        .unwrap()
-        .to_ascii_lowercase()
-}
-
+#[derive(Debug)]
 pub(super) enum Button {
     Left,
     Middle,
@@ -69,12 +66,12 @@ pub(super) enum Button {
 }
 
 impl Button {
-    fn from_raw(button: c_int) -> Self {
+    fn from_sdl(button: MouseButton) -> Self {
         match button {
-            1 => Button::Left,
-            2 => Button::Middle,
-            3 => Button::Right,
-            _ => Button::Unknown,
+            MouseButton::Left => Self::Left,
+            MouseButton::Middle => Self::Middle,
+            MouseButton::Right => Self::Right,
+            _ => Self::Unknown,
         }
     }
 
@@ -88,131 +85,122 @@ impl Button {
     }
 }
 
-pub(super) unsafe fn poll_event(win: ptr::NonNull<SDL_Window>) -> Option<Event> {
-    let mut mx = 0;
-    let mut my = 0;
-    let mut wx = 0;
-    let mut wy = 0;
-    let mut e = SDL_Event { type_: 0 };
+pub(super) fn poll_event(
+    win: &Window,
+    event: &EventSubsystem,
+    event_pump: &mut EventPump,
+    mouse: &MouseUtil,
+) -> Option<Event> {
     loop {
-        if SDL_PollEvent(&mut e) == 0 {
-            return Option::None;
-        }
-        match e.type_ {
-            256 => {
+        match event_pump.poll_event() {
+            Option::None => return Option::None,
+            Some(SdlEvent::Quit { .. }) => {
                 return Some(Event::Quit);
             }
-            512 => {
-                if e.window.event as c_int == SDL_WindowEventID::SDL_WINDOWEVENT_RESIZED as c_int {
-                    return Some(Event::Resized {
-                        width: e.window.data1,
-                        height: e.window.data2,
-                    });
-                } else if e.window.event as c_int
-                    == SDL_WindowEventID::SDL_WINDOWEVENT_EXPOSED as c_int
-                {
+            Some(SdlEvent::Window { win_event, .. }) => match win_event {
+                WindowEvent::Resized(width, height) => {
+                    return Some(Event::Resized { width, height });
+                }
+                WindowEvent::Exposed => {
                     return Some(Event::Exposed);
                 }
-                if e.window.event as c_int
-                    == SDL_WindowEventID::SDL_WINDOWEVENT_FOCUS_GAINED as c_int
-                {
-                    SDL_FlushEvent(SDL_EventType::SDL_KEYDOWN as u32);
+                WindowEvent::FocusGained => {
+                    event.flush_event(EventType::KeyDown);
                 }
-            }
-            4096 => {
-                SDL_GetGlobalMouseState(&mut mx, &mut my);
-                SDL_GetWindowPosition(win.as_ptr(), &mut wx, &mut wy);
-                let file = CStr::from_ptr(e.drop.file).to_str().unwrap().to_owned();
-                SDL_free(e.drop.file as *mut c_void);
+                _ => {}
+            },
+            Some(SdlEvent::DropFile { filename, .. }) => {
+                let mouse_state = event_pump.mouse_state();
+                let (mx, my) = (mouse_state.x(), mouse_state.y());
+                let (wx, wy) = win.position();
 
                 return Some(Event::FileDropped {
-                    file,
+                    file: filename,
                     x: mx - wx,
                     y: my - wy,
                 });
             }
-            768 => {
+            Some(SdlEvent::KeyDown { keycode, .. }) => {
                 return Some(Event::KeyPressed {
-                    key: key_name(e.key.keysym.sym),
+                    key: keycode.unwrap().name().to_lowercase(),
                 });
             }
-            769 => {
+            Some(SdlEvent::KeyUp { keycode, .. }) => {
                 return Some(Event::KeyReleased {
-                    key: key_name(e.key.keysym.sym),
+                    key: keycode.unwrap().name().to_lowercase(),
                 });
             }
-            771 => {
-                let text = &*(&e.text.text[..] as *const _ as *const [u8]);
-                return Some(Event::TextInput {
-                    text: String::from_utf8_lossy(text).into_owned(),
-                });
+            Some(SdlEvent::TextInput { text, .. }) => {
+                return Some(Event::TextInput { text });
             }
-            1025 => {
-                if e.button.button == 1 {
-                    SDL_CaptureMouse(SDL_bool::SDL_TRUE);
+            Some(SdlEvent::MouseButtonDown {
+                mouse_btn,
+                clicks,
+                x,
+                y,
+                ..
+            }) => {
+                if let MouseButton::Left = mouse_btn {
+                    mouse.capture(true);
                 }
                 return Some(Event::MousePressed {
-                    button: Button::from_raw(e.button.button as c_int),
-                    x: e.button.x,
-                    y: e.button.y,
-                    clicks: e.button.clicks,
+                    button: Button::from_sdl(mouse_btn),
+                    x,
+                    y,
+                    clicks,
                 });
             }
-            1026 => {
-                if e.button.button == 1 {
-                    SDL_CaptureMouse(SDL_bool::SDL_FALSE);
+            Some(SdlEvent::MouseButtonUp {
+                mouse_btn, x, y, ..
+            }) => {
+                if let MouseButton::Left = mouse_btn {
+                    mouse.capture(false);
                 }
                 return Some(Event::MouseReleased {
-                    button: Button::from_raw(e.button.button as c_int),
-                    x: e.button.x,
-                    y: e.button.y,
+                    button: Button::from_sdl(mouse_btn),
+                    x,
+                    y,
                 });
             }
-            1024 => {
-                return Some(Event::MouseMoved {
-                    x: e.motion.x,
-                    y: e.motion.y,
-                    xrel: e.motion.xrel,
-                    yrel: e.motion.yrel,
-                });
+            Some(SdlEvent::MouseMotion {
+                x, y, xrel, yrel, ..
+            }) => {
+                return Some(Event::MouseMoved { x, y, xrel, yrel });
             }
-            1027 => {
-                return Some(Event::MouseWheel { y: e.wheel.y });
+            Some(SdlEvent::MouseWheel { y, .. }) => {
+                return Some(Event::MouseWheel { y });
             }
             _ => {}
         }
     }
 }
 
-pub(super) unsafe fn set_window_title(win: ptr::NonNull<SDL_Window>, title: &str) {
-    let title = CString::new(title).unwrap();
-    SDL_SetWindowTitle(win.as_ptr(), title.as_ptr());
+pub(super) fn set_window_title(win: &mut Window, title: &str) {
+    win.set_title(title).expect("Could not set window title");
 }
 
-pub(super) unsafe fn set_window_mode(win: ptr::NonNull<SDL_Window>, n: c_int) {
-    SDL_SetWindowFullscreen(
-        win.as_ptr(),
-        if n == WIN_FULLSCREEN as c_int {
-            SDL_WindowFlags::SDL_WINDOW_FULLSCREEN_DESKTOP as u32
-        } else {
-            0
-        },
-    );
+pub(super) fn set_window_mode(win: &mut Window, n: c_int) {
+    win.set_fullscreen(if n == WIN_FULLSCREEN as c_int {
+        FullscreenType::Desktop
+    } else {
+        FullscreenType::Off
+    })
+    .expect("Could not set fullscreen");
     if n == WIN_NORMAL as c_int {
-        SDL_RestoreWindow(win.as_ptr());
+        win.restore();
     }
     if n == WIN_MAXIMIZED as c_int {
-        SDL_MaximizeWindow(win.as_ptr());
+        win.maximize();
     }
 }
 
-pub(super) unsafe fn window_has_focus(win: ptr::NonNull<SDL_Window>) -> bool {
-    let flags = SDL_GetWindowFlags(win.as_ptr());
+pub(super) fn window_has_focus(win: &Window) -> bool {
+    let flags = win.window_flags();
     flags & SDL_WindowFlags::SDL_WINDOW_INPUT_FOCUS as c_uint != 0
 }
 
-pub(super) unsafe fn window_get_size(win: ptr::NonNull<SDL_Window>, x: &mut c_int, y: &mut c_int) {
-    let surf = ptr::NonNull::new(SDL_GetWindowSurface(win.as_ptr())).unwrap();
-    *x = surf.as_ref().w;
-    *y = surf.as_ref().h;
+pub(super) fn window_get_size(win: &Window, event_pump: &EventPump, x: &mut c_int, y: &mut c_int) {
+    let surf = win.surface(event_pump).unwrap();
+    *x = surf.width() as i32;
+    *y = surf.height() as i32;
 }

@@ -3,14 +3,20 @@ use crate::{
     c_str,
     rencache::RenCache,
     renderer::{RenColor, RenFont, RenRect},
-    WINDOW,
+    EVENT_PUMP, WINDOW,
 };
 use lua_sys::*;
 use once_cell::sync::Lazy;
 use std::{ffi::CStr, mem, os::raw::c_int, ptr, sync::Mutex};
 
-pub(super) static mut RENCACHE: Lazy<Mutex<RenCache>> =
-    Lazy::new(|| Mutex::new(unsafe { RenCache::init(WINDOW.unwrap()) }));
+pub(super) static mut RENCACHE: Lazy<Mutex<RenCache>> = Lazy::new(|| {
+    Mutex::new(unsafe {
+        RenCache::init(
+            &WINDOW.as_ref().unwrap().lock().unwrap(),
+            &EVENT_PUMP.as_ref().unwrap().lock().unwrap(),
+        )
+    })
+});
 
 unsafe extern "C" fn checkcolor(state: *mut lua_State, idx: c_int, def: c_int) -> RenColor {
     let mut color = RenColor::default();
@@ -44,12 +50,18 @@ unsafe extern "C" fn f_show_debug(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_begin_frame(_: *mut lua_State) -> c_int {
-    RENCACHE.lock().unwrap().begin_frame(WINDOW.unwrap());
+    RENCACHE.lock().unwrap().begin_frame(
+        &WINDOW.as_ref().unwrap().lock().unwrap(),
+        &EVENT_PUMP.as_ref().unwrap().lock().unwrap(),
+    );
     0
 }
 
 unsafe extern "C" fn f_end_frame(_: *mut lua_State) -> c_int {
-    RENCACHE.lock().unwrap().end_frame(WINDOW.unwrap());
+    RENCACHE.lock().unwrap().end_frame(
+        &mut WINDOW.as_mut().unwrap().lock().unwrap(),
+        &EVENT_PUMP.as_ref().unwrap().lock().unwrap(),
+    );
     0
 }
 

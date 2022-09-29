@@ -4,22 +4,36 @@ use crate::{
     window::{
         poll_event, set_window_mode, set_window_title, window_get_size, window_has_focus, Event,
     },
-    WINDOW,
+    EVENT_PUMP, WINDOW,
 };
 use libc::system;
 use lua_sys::*;
-use sdl2_sys::*;
+use sdl2::{
+    messagebox::{show_message_box, ButtonData, MessageBoxButtonFlag, MessageBoxFlag},
+    mouse::{Cursor, SystemCursor},
+    sys::SDL_WaitEventTimeout,
+};
 use std::{
     env::set_current_dir,
     ffi::{CStr, CString},
     fs, mem,
-    os::raw::{c_char, c_double, c_int, c_void},
-    ptr,
-    time::SystemTime,
+    os::raw::{c_char, c_int},
+    ptr, thread,
+    time::{Duration, SystemTime},
 };
 
 unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
-    match poll_event(WINDOW.unwrap()) {
+    let win = WINDOW.as_ref().unwrap().lock().unwrap();
+    let ctx = win.subsystem().sdl();
+    let event = ctx.event().unwrap();
+    let mouse = ctx.mouse();
+
+    match poll_event(
+        &win,
+        &event,
+        &mut EVENT_PUMP.as_mut().unwrap().lock().unwrap(),
+        &mouse,
+    ) {
         Option::None => 0,
         Some(Event::Quit) => {
             lua_pushstring(state, c_str!("quit"));
@@ -104,12 +118,12 @@ unsafe extern "C" fn f_wait_event(state: *mut lua_State) -> c_int {
     let n = luaL_checknumber(state, 1);
     lua_pushboolean(
         state,
+        // The Rust SDL2 bindings do not provide a way to wait for an event
+        // without removing it from the queue.
         SDL_WaitEventTimeout(ptr::null_mut(), (n * 1000.0) as c_int),
     );
     1
 }
-
-static mut CURSOR_CACHE: [*mut SDL_Cursor; 12] = [ptr::null_mut(); 12];
 
 static mut CURSOR_OPTS: [*const c_char; 6] = [
     c_str!("arrow"),
@@ -120,12 +134,12 @@ static mut CURSOR_OPTS: [*const c_char; 6] = [
     ptr::null(),
 ];
 
-static mut CURSOR_ENUMS: [SDL_SystemCursor; 5] = [
-    SDL_SystemCursor::SDL_SYSTEM_CURSOR_ARROW,
-    SDL_SystemCursor::SDL_SYSTEM_CURSOR_IBEAM,
-    SDL_SystemCursor::SDL_SYSTEM_CURSOR_SIZEWE,
-    SDL_SystemCursor::SDL_SYSTEM_CURSOR_SIZENS,
-    SDL_SystemCursor::SDL_SYSTEM_CURSOR_HAND,
+static mut CURSOR_ENUMS: [SystemCursor; 5] = [
+    SystemCursor::Arrow,
+    SystemCursor::IBeam,
+    SystemCursor::SizeWE,
+    SystemCursor::SizeNS,
+    SystemCursor::Hand,
 ];
 
 unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
@@ -136,19 +150,14 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
         CURSOR_OPTS.as_mut_ptr() as *const *const c_char,
     );
     let n = CURSOR_ENUMS[opt as usize];
-    let mut cursor = CURSOR_CACHE[n as usize];
-    if cursor.is_null() {
-        cursor = SDL_CreateSystemCursor(n);
-        CURSOR_CACHE[n as usize] = cursor;
-    }
-    SDL_SetCursor(cursor);
+    Cursor::from_system(n).expect("Could not set cursor").set();
     0
 }
 
 unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> c_int {
     let title = luaL_checklstring(state, 1, ptr::null_mut());
     let title = CStr::from_ptr(title).to_str().unwrap();
-    set_window_title(WINDOW.unwrap(), title);
+    set_window_title(&mut WINDOW.as_mut().unwrap().lock().unwrap(), title);
     0
 }
 
@@ -160,19 +169,27 @@ static mut WINDOW_OPTS: [*const c_char; 4] = [
 ];
 unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> c_int {
     let n = luaL_checkoption(state, 1, c_str!("normal"), WINDOW_OPTS.as_ptr());
-    set_window_mode(WINDOW.unwrap(), n);
+    set_window_mode(&mut WINDOW.as_mut().unwrap().lock().unwrap(), n);
     0
 }
 
 unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> c_int {
-    lua_pushboolean(state, window_has_focus(WINDOW.unwrap()) as c_int);
+    lua_pushboolean(
+        state,
+        window_has_focus(&WINDOW.as_ref().unwrap().lock().unwrap()) as c_int,
+    );
     1
 }
 
 unsafe extern "C" fn f_get_size(state: *mut lua_State) -> c_int {
     let mut w = 0;
     let mut h = 0;
-    window_get_size(WINDOW.unwrap(), &mut w, &mut h);
+    window_get_size(
+        &WINDOW.as_ref().unwrap().lock().unwrap(),
+        &EVENT_PUMP.as_ref().unwrap().lock().unwrap(),
+        &mut w,
+        &mut h,
+    );
     lua_pushnumber(state, w as lua_Number);
     lua_pushnumber(state, h as lua_Number);
     2
@@ -180,31 +197,37 @@ unsafe extern "C" fn f_get_size(state: *mut lua_State) -> c_int {
 
 unsafe extern "C" fn f_show_confirm_dialog(state: *mut lua_State) -> c_int {
     let title = luaL_checklstring(state, 1, ptr::null_mut());
+    let title = CStr::from_ptr(title).to_str().unwrap();
     let message = luaL_checklstring(state, 2, ptr::null_mut());
-    let mut buttons = [
-        SDL_MessageBoxButtonData {
-            flags: SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT as u32,
-            buttonid: 1,
-            text: c_str!("Yes"),
+    let message = CStr::from_ptr(message).to_str().unwrap();
+    let buttons = [
+        ButtonData {
+            flags: MessageBoxButtonFlag::RETURNKEY_DEFAULT,
+            button_id: 1,
+            text: "Yes",
         },
-        SDL_MessageBoxButtonData {
-            flags: SDL_MessageBoxButtonFlags::SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT as u32,
-            buttonid: 0,
-            text: c_str!("No"),
+        ButtonData {
+            flags: MessageBoxButtonFlag::ESCAPEKEY_DEFAULT,
+            button_id: 0,
+            text: "No",
         },
     ];
-    let data = SDL_MessageBoxData {
-        flags: 0,
-        window: ptr::null_mut(),
+    let button = show_message_box(
+        MessageBoxFlag::empty(),
+        &buttons,
         title,
         message,
-        numbuttons: 2 as c_int,
-        buttons: buttons.as_mut_ptr(),
-        colorScheme: ptr::null(),
-    };
-    let mut buttonid = 0;
-    SDL_ShowMessageBox(&data, &mut buttonid);
-    lua_pushboolean(state, (buttonid == 1) as c_int);
+        Option::None,
+        Option::None,
+    )
+    .expect("Could not show confim dialog");
+    lua_pushboolean(
+        state,
+        matches!(
+            button,
+            sdl2::messagebox::ClickedButton::CustomButton(ButtonData { button_id: 1, .. })
+        ) as c_int,
+    );
     1
 }
 
@@ -293,30 +316,51 @@ unsafe extern "C" fn f_get_file_info(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_get_clipboard(state: *mut lua_State) -> c_int {
-    let text = SDL_GetClipboardText();
-    if text.is_null() {
-        return 0;
+    let clipboard = WINDOW
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .subsystem()
+        .clipboard();
+    let text = clipboard.clipboard_text().ok();
+    match text {
+        Option::None => 0,
+        Some(text) => {
+            let text = CString::new(text).unwrap();
+            lua_pushstring(state, text.as_ptr());
+            1
+        }
     }
-    lua_pushstring(state, text);
-    SDL_free(text as *mut c_void);
-    1
 }
 
 unsafe extern "C" fn f_set_clipboard(state: *mut lua_State) -> c_int {
     let text = luaL_checklstring(state, 1, ptr::null_mut());
-    SDL_SetClipboardText(text);
+    let clipboard = WINDOW
+        .as_ref()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .subsystem()
+        .clipboard();
+    clipboard
+        .set_clipboard_text(CStr::from_ptr(text).to_str().unwrap())
+        .expect("Could not set clipboard");
     0
 }
 
 unsafe extern "C" fn f_get_time(state: *mut lua_State) -> c_int {
-    let n = SDL_GetPerformanceCounter() as c_double / SDL_GetPerformanceFrequency() as c_double;
+    let n = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("The system clock went backwards")
+        .as_secs_f64();
     lua_pushnumber(state, n);
     1
 }
 
 unsafe extern "C" fn f_sleep(state: *mut lua_State) -> c_int {
     let n = luaL_checknumber(state, 1 as c_int);
-    SDL_Delay((n * 1000.0) as u32);
+    thread::sleep(Duration::from_millis((n * 1000.0) as u64));
     0
 }
 

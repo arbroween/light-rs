@@ -2,12 +2,15 @@
 
 use api::api_load_libs;
 use lua_sys::*;
-use sdl2_sys::*;
+use sdl2::{
+    event::EventType, pixels::PixelMasks, surface::Surface, video::Window, EventPump,
+    VideoSubsystem,
+};
 use std::{
     ffi::{CString, OsString},
     fs,
-    os::raw::{c_char, c_double, c_int, c_long, c_uchar, c_void},
-    ptr,
+    os::raw::{c_char, c_double, c_long, c_uchar},
+    sync::Mutex,
 };
 
 pub(self) mod api;
@@ -22,11 +25,12 @@ macro_rules! c_str {
 }
 pub(self) use c_str;
 
-pub(self) static mut WINDOW: Option<ptr::NonNull<SDL_Window>> = Option::None;
+pub(self) static mut WINDOW: Option<Mutex<Window>> = Option::None;
 
-unsafe fn get_scale() -> c_double {
-    let mut dpi = 0.0;
-    SDL_GetDisplayDPI(0, ptr::null_mut(), &mut dpi, ptr::null_mut());
+pub(self) static mut EVENT_PUMP: Option<Mutex<EventPump>> = Option::None;
+
+fn get_scale(video: &VideoSubsystem) -> c_double {
+    let (_, dpi, _) = video.display_dpi(0).expect("Could not get display dpi");
     1.0
 }
 
@@ -54,8 +58,8 @@ pub(self) unsafe fn os_string_from_ptr(filename: *const c_char) -> OsString {
     OsStr::from_bytes(CStr::from_ptr(filename).to_bytes()).to_owned()
 }
 
-unsafe fn init_window_icon() {
-    static mut ICON_RGBA: [c_uchar; 16384] = [
+fn init_window_icon(window: &mut Window) {
+    let mut icon_rgba: [u8; 16384] = [
         0x2e, 0x2e, 0x32, 0x6d, 0x2e, 0x2e, 0x32, 0xe4, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32,
         0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e,
         0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e,
@@ -1150,51 +1154,48 @@ unsafe fn init_window_icon() {
         0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xff, 0x2e, 0x2e, 0x32, 0xe4,
         0x2e, 0x2e, 0x32, 0x6e,
     ];
-    let surf = SDL_CreateRGBSurfaceFrom(
-        ICON_RGBA.as_mut_ptr() as *mut c_void,
-        64,
-        64,
-        32,
-        64 * 4,
-        0xff,
-        0xff00,
-        0xff0000,
-        0xff000000,
-    );
-    SDL_SetWindowIcon(WINDOW.unwrap().as_ptr(), surf);
-    SDL_FreeSurface(surf);
+    let masks = PixelMasks {
+        bpp: 32,
+        rmask: 0xff,
+        gmask: 0xff00,
+        bmask: 0xff0000,
+        amask: 0xff000000,
+    };
+    let surf = Surface::from_data_pixelmasks(&mut icon_rgba, 64, 64, 32, masks)
+        .expect("Could not create surface for window icon");
+    window.set_icon(surf);
 }
 
 fn main() {
     unsafe {
-        SDL_Init(0x20 | 0x4000);
-        SDL_EnableScreenSaver();
-        SDL_EventState(SDL_EventType::SDL_DROPFILE as u32, 1);
-        atexit(Some(SDL_Quit));
-        SDL_SetHint(
-            c_str!("SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR"),
-            c_str!("0"),
-        );
-        SDL_SetHint(c_str!("SDL_MOUSE_FOCUS_CLICKTHROUGH"), c_str!("1"));
-        let mut dm: SDL_DisplayMode = SDL_DisplayMode {
-            format: 0,
-            w: 0,
-            h: 0,
-            refresh_rate: 0,
-            driverdata: ptr::null_mut(),
-        };
-        SDL_GetCurrentDisplayMode(0, &mut dm);
-        WINDOW = ptr::NonNull::new(SDL_CreateWindow(
-            c_str!(""),
-            0x1fff0000,
-            0x1fff0000,
-            (f64::from(dm.w) * 0.8) as c_int,
-            (f64::from(dm.h) * 0.8) as c_int,
-            SDL_WindowFlags::SDL_WINDOW_RESIZABLE as u32
-                | SDL_WindowFlags::SDL_WINDOW_ALLOW_HIGHDPI as u32
-                | SDL_WindowFlags::SDL_WINDOW_HIDDEN as u32,
-        ));
-        init_window_icon();
+        let context = sdl2::init().expect("Could not initialize SDL2");
+        let video = context
+            .video()
+            .expect("Could not initialize video subsystem");
+        let mut event_pump = context.event_pump().expect("Could not get event pump");
+        video.enable_screen_saver();
+        event_pump.enable_event(EventType::DropFile);
+        sdl2::hint::set("SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR", "0");
+        sdl2::hint::set("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1");
+        let dm = video
+            .current_display_mode(0)
+            .expect("Could not get current display mode");
+        let mut window = video
+            .window(
+                "",
+                (f64::from(dm.w) * 0.8) as u32,
+                (f64::from(dm.h) * 0.8) as u32,
+            )
+            .position(0x1fff0000, 0x1fff0000)
+            .resizable()
+            .allow_highdpi()
+            .hidden()
+            .build()
+            .expect("Could not create window");
+        init_window_icon(&mut window);
+        WINDOW = Some(Mutex::new(window));
+        EVENT_PUMP = Some(Mutex::new(event_pump));
+
         let state = luaL_newstate();
         luaL_openlibs(state);
         api_load_libs(state);
@@ -1207,9 +1208,10 @@ fn main() {
         lua_setglobal(state, c_str!("ARGS"));
         lua_pushstring(state, c_str!("1.11"));
         lua_setglobal(state, c_str!("VERSION"));
-        lua_pushstring(state, SDL_GetPlatform());
+        let platform = CString::new(sdl2::get_platform()).unwrap();
+        lua_pushstring(state, platform.as_ptr());
         lua_setglobal(state, c_str!("PLATFORM"));
-        lua_pushnumber(state, get_scale());
+        lua_pushnumber(state, get_scale(&video));
         lua_setglobal(state, c_str!("SCALE"));
         let exename = CString::new(get_exe_filename()).unwrap();
         lua_pushstring(state, exename.as_ptr());
@@ -1244,6 +1246,7 @@ fn main() {
         ) != 0
             || lua_pcallk(state, 0, -1, 0, 0, Option::None) != 0;
         lua_close(state);
-        SDL_DestroyWindow(WINDOW.unwrap().as_ptr());
+        drop(WINDOW.take());
+        drop(EVENT_PUMP.take());
     }
 }
