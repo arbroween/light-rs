@@ -1,10 +1,8 @@
 use crate::{
     api::renderer::RENCACHE,
     c_str, os_string_from_ptr,
-    window::{
-        poll_event, set_window_mode, set_window_title, window_get_size, window_has_focus, Event,
-    },
-    EVENT_PUMP, WINDOW,
+    window::{Event, WindowMode},
+    WINDOW,
 };
 use libc::system;
 use lua_sys::*;
@@ -23,17 +21,7 @@ use std::{
 };
 
 unsafe extern "C" fn f_poll_event(state: *mut lua_State) -> c_int {
-    let win = WINDOW.as_ref().unwrap().lock().unwrap();
-    let ctx = win.subsystem().sdl();
-    let event = ctx.event().unwrap();
-    let mouse = ctx.mouse();
-
-    match poll_event(
-        &win,
-        &event,
-        &mut EVENT_PUMP.as_mut().unwrap().lock().unwrap(),
-        &mouse,
-    ) {
+    match WINDOW.lock().unwrap().poll_event() {
         Option::None => 0,
         Some(Event::Quit) => {
             lua_pushstring(state, c_str!("quit"));
@@ -157,7 +145,7 @@ unsafe extern "C" fn f_set_cursor(state: *mut lua_State) -> c_int {
 unsafe extern "C" fn f_set_window_title(state: *mut lua_State) -> c_int {
     let title = luaL_checklstring(state, 1, ptr::null_mut());
     let title = CStr::from_ptr(title).to_str().unwrap();
-    set_window_title(&mut WINDOW.as_mut().unwrap().lock().unwrap(), title);
+    WINDOW.lock().unwrap().set_title(title);
     0
 }
 
@@ -169,27 +157,17 @@ static mut WINDOW_OPTS: [*const c_char; 4] = [
 ];
 unsafe extern "C" fn f_set_window_mode(state: *mut lua_State) -> c_int {
     let n = luaL_checkoption(state, 1, c_str!("normal"), WINDOW_OPTS.as_ptr());
-    set_window_mode(&mut WINDOW.as_mut().unwrap().lock().unwrap(), n);
+    WINDOW.lock().unwrap().set_mode(WindowMode::from_raw(n));
     0
 }
 
 unsafe extern "C" fn f_window_has_focus(state: *mut lua_State) -> c_int {
-    lua_pushboolean(
-        state,
-        window_has_focus(&WINDOW.as_ref().unwrap().lock().unwrap()) as c_int,
-    );
+    lua_pushboolean(state, WINDOW.lock().unwrap().has_focus() as c_int);
     1
 }
 
 unsafe extern "C" fn f_get_size(state: *mut lua_State) -> c_int {
-    let mut w = 0;
-    let mut h = 0;
-    window_get_size(
-        &WINDOW.as_ref().unwrap().lock().unwrap(),
-        &EVENT_PUMP.as_ref().unwrap().lock().unwrap(),
-        &mut w,
-        &mut h,
-    );
+    let (w, h) = WINDOW.lock().unwrap().size();
     lua_pushnumber(state, w as lua_Number);
     lua_pushnumber(state, h as lua_Number);
     2
@@ -316,13 +294,7 @@ unsafe extern "C" fn f_get_file_info(state: *mut lua_State) -> c_int {
 }
 
 unsafe extern "C" fn f_get_clipboard(state: *mut lua_State) -> c_int {
-    let clipboard = WINDOW
-        .as_ref()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .subsystem()
-        .clipboard();
+    let clipboard = WINDOW.lock().unwrap().clipboard();
     let text = clipboard.clipboard_text().ok();
     match text {
         Option::None => 0,
@@ -336,13 +308,7 @@ unsafe extern "C" fn f_get_clipboard(state: *mut lua_State) -> c_int {
 
 unsafe extern "C" fn f_set_clipboard(state: *mut lua_State) -> c_int {
     let text = luaL_checklstring(state, 1, ptr::null_mut());
-    let clipboard = WINDOW
-        .as_ref()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .subsystem()
-        .clipboard();
+    let clipboard = WINDOW.lock().unwrap().clipboard();
     clipboard
         .set_clipboard_text(CStr::from_ptr(text).to_str().unwrap())
         .expect("Could not set clipboard");

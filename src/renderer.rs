@@ -1,4 +1,4 @@
-use sdl2::{video::Window, EventPump};
+use crate::window::Window;
 use stb_truetype_rust::*;
 use std::{
     fs,
@@ -284,8 +284,8 @@ pub(super) struct Renderer {
 }
 
 impl Renderer {
-    pub(super) fn init(win: &Window, event_pump: &EventPump) -> Self {
-        let surf = win.surface(event_pump).unwrap();
+    pub(super) fn init(win: &Window) -> Self {
+        let surf = win.surface().unwrap();
         Self {
             clip: Clip {
                 left: 0,
@@ -297,19 +297,15 @@ impl Renderer {
         }
     }
 
-    pub(super) fn update_rects(
-        &mut self,
-        rects: &[RenRect],
-        win: &mut Window,
-        event_pump: &EventPump,
-    ) {
+    pub(super) fn update_rects(&mut self, rects: &[RenRect], window: &mut Window) {
         unsafe {
-            win.surface(event_pump)
+            window
+                .surface()
                 .expect("Could not get window surface")
                 .update_window_rects(mem::transmute(rects))
                 .expect("Could not update window surface");
             if self.initial_frame {
-                win.show();
+                window.show();
                 self.initial_frame = false;
             }
         }
@@ -322,13 +318,7 @@ impl Renderer {
         self.clip.bottom = rect.y + rect.height;
     }
 
-    pub(super) fn draw_rect(
-        &mut self,
-        rect: RenRect,
-        color: RenColor,
-        win: &Window,
-        event_pump: &EventPump,
-    ) {
+    pub(super) fn draw_rect(&mut self, rect: RenRect, color: RenColor, window: &Window) {
         if color.a == 0 {
             return;
         }
@@ -354,7 +344,7 @@ impl Renderer {
         } else {
             y2
         };
-        let mut surf = win.surface(event_pump).unwrap();
+        let mut surf = window.surface().unwrap();
         let width = surf.width();
         let height = surf.height();
         surf.with_lock_mut(|d| {
@@ -398,8 +388,7 @@ impl Renderer {
         mut x: c_int,
         mut y: c_int,
         color: RenColor,
-        win: &Window,
-        event_pump: &EventPump,
+        window: &Window,
     ) {
         if color.a == 0 {
             return;
@@ -427,7 +416,7 @@ impl Renderer {
         if sub.width <= 0 || sub.height <= 0 {
             return;
         }
-        let mut surf = win.surface(event_pump).unwrap();
+        let mut surf = window.surface().unwrap();
         let mut s = image.pixels.as_ref();
         let width = surf.width();
         let height = surf.height();
@@ -466,8 +455,7 @@ impl Renderer {
         mut x: c_int,
         y: c_int,
         color: RenColor,
-        win: &Window,
-        event_pump: &EventPump,
+        window: &Window,
     ) -> c_int {
         let mut rect = RenRect::default();
         let p = text;
@@ -484,8 +472,7 @@ impl Renderer {
                 (x as c_float + g.xoff) as c_int,
                 (y as c_float + g.yoff) as c_int,
                 color,
-                win,
-                event_pump,
+                window,
             );
             x = (x as c_float + g.xadvance) as c_int;
         }

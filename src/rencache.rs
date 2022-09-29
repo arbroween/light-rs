@@ -1,10 +1,9 @@
 use crate::{
     renderer::{RenColor, RenFont, RenRect, Renderer},
-    window::window_get_size,
+    window::Window,
 };
 use hashers::fnv::FNV1aHasher32;
 use libc::rand;
-use sdl2::{video::Window, EventPump};
 use std::{
     convert::TryInto,
     hash::{Hash, Hasher},
@@ -131,9 +130,9 @@ pub(super) struct RenCache {
 }
 
 impl RenCache {
-    pub(super) fn init(win: &Window, event_pump: &EventPump) -> Self {
+    pub(super) fn init(window: &Window) -> Self {
         Self {
-            renderer: Renderer::init(win, event_pump),
+            renderer: Renderer::init(window),
             cells_buf1: [0; CELLS_BUF_SIZE],
             cells_buf2: [0; CELLS_BUF_SIZE],
             cells_prev: CellsBufferIndex::CellsBuf1,
@@ -230,10 +229,8 @@ impl RenCache {
         }
     }
 
-    pub(super) fn begin_frame(&mut self, win: &Window, event_pump: &EventPump) {
-        let mut w = 0;
-        let mut h = 0;
-        window_get_size(win, event_pump, &mut w, &mut h);
+    pub(super) fn begin_frame(&mut self, window: &Window) {
+        let (w, h) = window.size();
         if self.screen_rect.width != w || h != self.screen_rect.height {
             self.screen_rect.width = w;
             self.screen_rect.height = h;
@@ -270,7 +267,7 @@ impl RenCache {
         self.rect_buf[fresh4 as usize] = r;
     }
 
-    pub(super) fn end_frame(&mut self, win: &mut Window, event_pump: &EventPump) {
+    pub(super) fn end_frame(&mut self, window: &mut Window) {
         unsafe {
             let mut cmd: *mut Command = ptr::null_mut();
             let mut cr: RenRect = self.screen_rect;
@@ -330,8 +327,7 @@ impl RenCache {
                             self.renderer.set_clip_rect((*cmd).rect.intersection(r_1));
                         }
                         CommandType::DrawRect => {
-                            self.renderer
-                                .draw_rect((*cmd).rect, (*cmd).color, win, event_pump);
+                            self.renderer.draw_rect((*cmd).rect, (*cmd).color, window);
                         }
                         CommandType::DrawText => {
                             self.renderer.draw_text(
@@ -340,8 +336,7 @@ impl RenCache {
                                 (*cmd).rect.x,
                                 (*cmd).rect.y,
                                 (*cmd).color,
-                                win,
-                                event_pump,
+                                window,
                             );
                         }
                     }
@@ -353,12 +348,12 @@ impl RenCache {
                         r: rand() as u8,
                         a: 50,
                     };
-                    self.renderer.draw_rect(r_1, color, win, event_pump);
+                    self.renderer.draw_rect(r_1, color, window);
                 }
             }
             if rect_count > 0 {
                 self.renderer
-                    .update_rects(&self.rect_buf[..rect_count], win, event_pump);
+                    .update_rects(&self.rect_buf[..rect_count], window);
             }
             if has_free_commands {
                 cmd = ptr::null_mut();
