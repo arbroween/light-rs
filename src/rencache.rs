@@ -58,10 +58,10 @@ enum CommandType {
     DrawRect = 3,
 }
 
-unsafe fn hash<T>(h: *mut c_uint, data: *const T) {
-    let data = slice::from_raw_parts(data as *const u8, mem::size_of::<T>());
+unsafe fn hash<T>(hash: &mut c_uint, data: &T) {
+    let data = slice::from_raw_parts(data as *const T as *const u8, mem::size_of::<T>());
     for byte in data {
-        *h = (*h ^ *byte as c_uint).wrapping_mul(16777619);
+        *hash = (*hash ^ *byte as c_uint).wrapping_mul(16777619);
     }
 }
 
@@ -157,7 +157,6 @@ impl CellsBuffer {
     }
 
     fn update_overlapping_cells(&mut self, r: RenRect, h: FNV1aHasher32) {
-        unsafe {
             let x1 = r.x / 96;
             let y1 = r.y / 96;
             let x2 = (r.x + r.width) / 96;
@@ -167,10 +166,9 @@ impl CellsBuffer {
                     let idx = cell_idx(x, y);
                     // FIXME: We want to do the opposite of what `Hash` is made for.
                     //        We want the previous `Hasher` to be the `Hash` and write onto `CELLS`.
-                    hash(&mut self.cells[idx as usize] as *mut _, &h);
+                    unsafe { hash(&mut self.cells[idx as usize], &h); }
                 }
             }
-        }
     }
 
     fn swap_buffers(&mut self) {

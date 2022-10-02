@@ -10,7 +10,7 @@ use once_cell::sync::Lazy;
 use std::{ffi::CStr, mem, os::raw::c_int, ptr, sync::Mutex};
 
 pub(super) static mut RENCACHE: Lazy<Mutex<RenCache>> =
-    Lazy::new(|| Mutex::new(unsafe { RenCache::init(&WINDOW.lock().unwrap()) }));
+    Lazy::new(|| Mutex::new(RenCache::init(unsafe { &WINDOW.lock().unwrap() })));
 
 unsafe extern "C" fn checkcolor(state: *mut lua_State, idx: c_int, def: c_int) -> RenColor {
     let mut color = RenColor::default();

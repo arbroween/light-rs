@@ -69,11 +69,65 @@ impl RenColor {
     }
 }
 
+struct VerticalMetrics {
+    ascent: i32,
+    descent: i32,
+    linegap: i32,
+}
+
+#[derive(Clone, Debug)]
+struct FontInfo {
+    fontinfo: stbtt_fontinfo,
+}
+
+impl FontInfo {
+    fn init(data: &[u8]) -> Option<Self> {
+        let mut fontinfo: MaybeUninit<stbtt_fontinfo> = MaybeUninit::uninit();
+        // SAFETY: fontinfo is garanteed to point to valid (uninitialized) memory.
+        let ok = unsafe { stbtt_InitFont(fontinfo.as_mut_ptr(), data.as_ptr(), 0) };
+        if ok == 0 {
+            None
+        } else {
+            // SAFETY: We checked that stbtt_InitFont has successfully
+            //         initialized the memory.
+            let raw = unsafe { fontinfo.assume_init() };
+
+            Some(Self { fontinfo: raw })
+        }
+    }
+
+    fn scale_for_mapping_em_to_pixels(&mut self, pixels: f32) -> f32 {
+        // SAFETY: fontinfo is garanteed to be valid.
+        unsafe { stbtt_ScaleForMappingEmToPixels(&mut self.fontinfo, pixels) }
+    }
+
+    fn scale_for_pixel_height(&mut self, height: f32) -> f32 {
+        // SAFETY: fontinfo is garanteed to be valid.
+        unsafe { stbtt_ScaleForPixelHeight(&mut self.fontinfo, height) }
+    }
+
+    fn vertical_metrics(&mut self) -> VerticalMetrics {
+        let mut ascent = 0;
+        let mut descent = 0;
+        let mut linegap = 0;
+
+        // SAFETY: fontinfo is garanteed to be valid.
+        unsafe  { stbtt_GetFontVMetrics(
+            &mut self.fontinfo,
+            &mut ascent,
+            &mut descent,
+            &mut linegap,
+        ); }
+
+        VerticalMetrics { ascent, descent, linegap }
+    }
+}
+
 #[derive(Clone, Debug)]
 #[repr(C)]
 pub(super) struct RenFont {
     data: Box<[u8]>,
-    stbfont: stbtt_fontinfo,
+    stbfont: FontInfo,
     sets: [Option<Box<GlyphSet>>; 256],
     size: f32,
     height: c_int,
@@ -81,41 +135,27 @@ pub(super) struct RenFont {
 
 impl RenFont {
     pub(super) fn load<P: AsRef<Path>>(filename: P, size: c_float) -> Option<Box<Self>> {
-        unsafe {
+         {
             match fs::read(filename) {
                 Err(_) => Option::None,
                 Ok(data) => {
                     let data = data.into_boxed_slice();
-                    let mut stbfont: MaybeUninit<stbtt_fontinfo> = MaybeUninit::uninit();
-                    let ok = stbtt_InitFont(stbfont.as_mut_ptr(), data.as_ptr(), 0);
-                    if ok == 0 {
-                        Option::None
-                    } else {
-                        let mut stbfont = stbfont.assume_init();
-                        let mut ascent = 0;
-                        let mut descent = 0;
-                        let mut linegap = 0;
-                        stbtt_GetFontVMetrics(
-                            &mut stbfont,
-                            &mut ascent,
-                            &mut descent,
-                            &mut linegap,
-                        );
-                        let scale = stbtt_ScaleForMappingEmToPixels(&mut stbfont, size);
-                        let height = (((ascent - descent + linegap) as c_float * scale) as c_double
-                            + 0.5f64) as c_int;
-                        let mut font = Box::new(Self {
-                            data,
-                            stbfont,
-                            sets: [(); 256].map(|_| Option::None),
-                            size,
-                            height,
-                        });
-                        let g = &mut font.get_glyphset_mut('\n' as i32).glyphs;
-                        g['\t' as usize].x1 = g['\t' as usize].x0;
-                        g['\n' as usize].x1 = g['\n' as usize].x0;
-                        Some(font)
-                    }
+                    let mut stbfont = FontInfo::init(&data)?;
+                    let metrics = stbfont.vertical_metrics();
+                    let scale = stbfont.scale_for_mapping_em_to_pixels(size);
+                    let height = (((metrics.ascent - metrics.descent + metrics.linegap) as c_float * scale) as c_double
+                        + 0.5f64) as c_int;
+                    let mut font = Box::new(Self {
+                        data,
+                        stbfont,
+                        sets: [(); 256].map(|_| Option::None),
+                        size,
+                        height,
+                    });
+                    let g = &mut font.get_glyphset_mut('\n' as i32).glyphs;
+                    g['\t' as usize].x1 = g['\t' as usize].x0;
+                    g['\n' as usize].x1 = g['\n' as usize].x0;
+                    Some(font)
                 }
             }
         }
@@ -136,8 +176,8 @@ impl RenFont {
             }; 256];
             let mut image = loop {
                 let mut image = RenImage::new(width, height);
-                let s = stbtt_ScaleForMappingEmToPixels(&mut self.stbfont, 1.0)
-                    / stbtt_ScaleForPixelHeight(&mut self.stbfont, 1.0);
+                let s = self.stbfont.scale_for_mapping_em_to_pixels(1.0)
+                    / self.stbfont.scale_for_pixel_height(1.0);
                 let res = stbtt_BakeFontBitmap(
                     self.data.as_ptr(),
                     0,
@@ -156,12 +196,9 @@ impl RenFont {
                 height *= 2;
                 drop(image);
             };
-            let mut ascent = 0;
-            let mut descent = 0;
-            let mut linegap = 0;
-            stbtt_GetFontVMetrics(&mut self.stbfont, &mut ascent, &mut descent, &mut linegap);
-            let scale = stbtt_ScaleForMappingEmToPixels(&mut self.stbfont, self.size);
-            let scaled_ascent = ((ascent as c_float * scale) as c_double + 0.5f64) as c_int;
+            let metrics = self.stbfont.vertical_metrics();
+            let scale = self.stbfont.scale_for_mapping_em_to_pixels(self.size);
+            let scaled_ascent = ((metrics.ascent as c_float * scale) as c_double + 0.5f64) as c_int;
             for glyph in &mut glyphs {
                 glyph.yoff += scaled_ascent as c_float;
                 glyph.xadvance = glyph.xadvance.floor();
