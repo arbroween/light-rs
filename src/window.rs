@@ -276,7 +276,7 @@ impl Window {
     }
 
     pub(super) fn scale(&self) -> f64 {
-        let (_, dpi, _) = self
+        let (_, _dpi, _) = self
             .window
             .subsystem()
             .display_dpi(0)
