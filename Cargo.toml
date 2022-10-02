@@ -1,9 +1,8 @@
 [package]
 name = "light"
-authors = ["C2Rust"]
+authors = ["arbroween"]
 version = "1.11.0"
 edition = "2018"
-#autobins = false
 
 [dependencies]
 hashers = "1.0.1"
