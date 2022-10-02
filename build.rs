@@ -42,7 +42,7 @@ fn main() {
         Err(error) => panic!("Could not create ./target/<build_type>/data: {}", error),
     };
 
-    eprintln!("src_data = {:?}", &src_data);
+    println!("cargo:rerun-if-changed={}", src_data.display());
     copy_dir_all(src_data, out_data).expect("Could not copy files");
 
     println!("cargo:rerun-if-changed=build.rs");
